@@ -1,0 +1,4741 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+app/favicon.ico
+app/globals.css
+app/layout.tsx
+app/page.tsx
+biome.json
+components/Editor/EditorBlock.tsx
+components/Editor/Editor.tsx
+components/Editor/FloatingToolbar.tsx
+components/Editor/useMarkdownEditor.ts
+components/modals/ExportModal.tsx
+components/modals/PreferencesModal.tsx
+components/Sidebar.tsx
+components/TopBar.tsx
+.gitignore
+hooks/useDocuments.ts
+hooks/usePreferences.ts
+lib/exportUtils.ts
+lib/markdownTransform.ts
+lib/serviceWorkerRegistration.ts
+next.config.ts
+package.json
+postcss.config.mjs
+public/file.svg
+public/globe.svg
+public/icon.svg
+public/manifest.json
+public/next.svg
+public/sw.js
+public/vercel.svg
+public/window.svg
+README.md
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="components/Editor/EditorBlock.tsx">
+'use client';
+
+import React, { useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent } from 'react';
+import hljs from 'highlight.js/lib/common';
+import { ParsedBlock } from '@/lib/markdownTransform';
+import { parseInlineMarkdown, parseTableMarkdown } from '@/lib/markdownTransform';
+
+interface EditorBlockProps {
+  block: ParsedBlock;
+  isFirst: boolean;
+  isFocused: boolean;
+  onFocus: (id: string) => void;
+  onBlur: () => void;
+  onTextChange: (id: string, text: string) => void;
+  onEnter: (id: string, currentText: string, caretOffset: number) => void;
+  onBackspaceEmpty: (id: string) => void;
+  onArrow: (id: string, dir: 'up' | 'down') => void;
+  onImagePaste: (id: string, file: File) => boolean;
+  onMarkdownPaste: (id: string, text: string) => boolean;
+  onCodeLanguageChange: (id: string, language: string) => void;
+  onClearDocument: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  registerRef: (id: string, el: HTMLElement | null) => void;
+}
+
+const CODE_LANGUAGES = [
+  'auto',
+  'plaintext',
+  'javascript',
+  'typescript',
+  'python',
+  'bash',
+  'json',
+  'markdown',
+  'html',
+  'css',
+  'sql',
+  'go',
+  'rust',
+  'java',
+  'c',
+  'cpp',
+  'yaml',
+];
+
+const LANGUAGE_LABELS: Record<string, string> = {
+  auto: 'Auto',
+  plaintext: 'Plain text',
+  javascript: 'JavaScript',
+  typescript: 'TypeScript',
+  python: 'Python',
+  bash: 'Bash',
+  json: 'JSON',
+  markdown: 'Markdown',
+  html: 'HTML',
+  css: 'CSS',
+  sql: 'SQL',
+  go: 'Go',
+  rust: 'Rust',
+  java: 'Java',
+  c: 'C',
+  cpp: 'C++',
+  yaml: 'YAML',
+};
+
+// Block type → HTML tag mapping
+const TAG_MAP: Partial<Record<string, string>> = {
+  h1: 'h1', h2: 'h2', h3: 'h3', h4: 'h4', h5: 'h5', h6: 'h6',
+  p: 'p', quote: 'blockquote', code: 'pre',
+  ul: 'li', ol: 'li',
+};
+
+const PLACEHOLDER_MAP: Record<string, string> = {
+  h1: 'Heading 1',
+  h2: 'Heading 2',
+  h3: 'Heading 3',
+  h4: 'Heading 4',
+  h5: 'Heading 5',
+  h6: 'Heading 6',
+  p: 'Write something…',
+  quote: 'Quote…',
+  code: 'Code…',
+  ul: 'List item…',
+  ol: 'List item…',
+};
+
+const MARKDOWN_PASTE_HINT = /(^#{1,6}\s)|(^>\s?)|(^[-*+]\s)|(^\d+\.\s)|(```)|(^\|.*\|$)|(!\[[^\]]*\]\([^\)]+\))|(\[[^\]]+\]\([^\)]+\))|(~{2}.+~{2})|(\*\*.+\*\*)|(\*[^*]+\*)/m;
+
+export const EditorBlock = React.memo(function EditorBlock({
+  block,
+  isFirst,
+  isFocused,
+  onFocus,
+  onBlur,
+  onTextChange,
+  onEnter,
+  onBackspaceEmpty,
+  onArrow,
+  onImagePaste,
+  onMarkdownPaste,
+  onCodeLanguageChange,
+  onClearDocument,
+  onUndo,
+  onRedo,
+  registerRef,
+}: EditorBlockProps) {
+  const elRef = useRef<HTMLElement | null>(null);
+  const isComposingRef = useRef(false);
+  const lastTextRef = useRef(block.text);
+  const skipNextBlurSyncRef = useRef(false);
+
+  useEffect(() => {
+    lastTextRef.current = block.text;
+  }, [block.text]);
+
+  // Register ref with parent
+  const setRef = useCallback(
+    (el: HTMLElement | null) => {
+      elRef.current = el;
+      registerRef(block.id, el);
+    },
+    [block.id, registerRef]
+  );
+
+  // Table block — rendered as static HTML
+  if (block.type === 'table') {
+    return (
+      <div
+        className="editor-content my-4"
+        dangerouslySetInnerHTML={{ __html: parseTableMarkdown(block.text) }}
+        onClick={() => onFocus(block.id)}
+      />
+    );
+  }
+
+  const tag = TAG_MAP[block.type] || 'p';
+  const placeholder = isFirst && block.type === 'h1'
+    ? 'What are we writing today?'
+    : PLACEHOLDER_MAP[block.type] ?? 'Write something…';
+
+  // Key down handler
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLElement>) => {
+      if (isComposingRef.current) return;
+
+      const el = elRef.current;
+      if (!el) return;
+      const text = el.textContent ?? '';
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          onRedo();
+        } else {
+          onUndo();
+        }
+        return;
+      }
+
+      if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        onRedo();
+        return;
+      }
+
+      if (mod && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        const sel = window.getSelection();
+        if (!sel) return;
+
+        const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+        const fullTextLength = text.length;
+        const isInsideCurrentBlock =
+          !!range && el.contains(range.startContainer) && el.contains(range.endContainer);
+        const selectedLength = range?.toString().length ?? 0;
+        const isWholeBlockSelected =
+          isInsideCurrentBlock && selectedLength === fullTextLength && fullTextLength > 0;
+
+        if (!isWholeBlockSelected) {
+          const blockRange = document.createRange();
+          blockRange.selectNodeContents(el);
+          sel.removeAllRanges();
+          sel.addRange(blockRange);
+          return;
+        }
+
+        const editorDoc = el.closest('[data-editor-doc="true"]');
+        if (editorDoc) {
+          const docRange = document.createRange();
+          docRange.selectNodeContents(editorDoc);
+          sel.removeAllRanges();
+          sel.addRange(docRange);
+        }
+        return;
+      }
+
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+          const editorDoc = el.closest('[data-editor-doc="true"]');
+          if (editorDoc) {
+            const range = sel.getRangeAt(0);
+            const docRange = document.createRange();
+            docRange.selectNodeContents(editorDoc);
+
+            const isWithinDoc =
+              editorDoc.contains(range.startContainer) &&
+              editorDoc.contains(range.endContainer);
+            const isWholeDocSelected =
+              isWithinDoc &&
+              range.toString().length > 0 &&
+              range.toString().length === docRange.toString().length;
+
+            if (isWholeDocSelected) {
+              e.preventDefault();
+              onClearDocument();
+              return;
+            }
+          }
+        }
+      }
+
+      if (e.key === 'Enter' && !e.shiftKey) {
+        if (block.type === 'code') {
+          // In code blocks Enter should insert a newline, not create a new content block.
+          return;
+        }
+
+        const sel = window.getSelection();
+        let caretOffset = text.length;
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          const preCaretRange = range.cloneRange();
+          preCaretRange.selectNodeContents(el);
+          preCaretRange.setEnd(range.startContainer, range.startOffset);
+          caretOffset = preCaretRange.toString().length;
+        }
+
+        skipNextBlurSyncRef.current = true;
+        e.preventDefault();
+        onEnter(block.id, text, caretOffset);
+        return;
+      }
+
+      if (e.key === 'Backspace' && text === '') {
+        e.preventDefault();
+        onBackspaceEmpty(block.id);
+        return;
+      }
+
+      if (e.key === 'ArrowUp') {
+        // Check if cursor is at the very start of the element
+        const sel = window.getSelection();
+        if (sel?.anchorOffset === 0) {
+          e.preventDefault();
+          onArrow(block.id, 'up');
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowDown') {
+        const sel = window.getSelection();
+        const len = el.textContent?.length ?? 0;
+        if (sel?.anchorOffset === len) {
+          e.preventDefault();
+          onArrow(block.id, 'down');
+        }
+        return;
+      }
+    },
+    [block.id, block.type, onEnter, onBackspaceEmpty, onArrow, onClearDocument, onUndo, onRedo]
+  );
+
+  // Input handler — fires after the DOM has been updated by the browser
+  const handleInput = useCallback(() => {
+    if (isComposingRef.current) return;
+    const el = elRef.current;
+    if (!el) return;
+    const text = el.textContent ?? '';
+    if (text !== lastTextRef.current) {
+      lastTextRef.current = text;
+      onTextChange(block.id, text);
+    }
+  }, [block.id, onTextChange]);
+
+  const highlightedCodeHtml = useMemo(() => {
+    const code = block.text || '';
+    const language = (block.language || 'plaintext').toLowerCase();
+    if (!code) return '';
+    try {
+      if (language !== 'plaintext' && hljs.getLanguage(language)) {
+        return hljs.highlight(code, { language }).value;
+      }
+      return hljs.highlightAuto(code).value;
+    } catch {
+      return code
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+  }, [block.text, block.language]);
+
+  // Paste handler
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLElement>) => {
+      // Check for image files
+      const items = Array.from(e.clipboardData?.items ?? []);
+      const imageItem = items.find((item) => item.type.startsWith('image/'));
+      if (imageItem) {
+        e.preventDefault();
+        const file = imageItem.getAsFile();
+        if (file) onImagePaste(block.id, file);
+        return;
+      }
+
+      // Check for text — try to detect if it's markdown
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      const looksLikeMarkdown =
+        text.includes('\n') ||
+        MARKDOWN_PASTE_HINT.test(text);
+
+      if (text && looksLikeMarkdown) {
+        e.preventDefault();
+        if (onMarkdownPaste(block.id, text)) return;
+      }
+
+      if (!text) {
+        return;
+      }
+
+      // Default: let browser handle plain text paste
+      // Prevent rich HTML paste
+      if (e.clipboardData?.getData('text/html')) {
+        e.preventDefault();
+        document.execCommand('insertText', false, text);
+      }
+    },
+    [block.id, onImagePaste, onMarkdownPaste]
+  );
+
+  // Block type → CSS class
+  const getBlockClass = () => {
+    const base = 'editor-block outline-none';
+    switch (block.type) {
+      case 'h1': return `${base} is-h1`;
+      case 'h2': return `${base} is-h2`;
+      case 'h3': return `${base} is-h3`;
+      case 'h4': return `${base} is-h4`;
+      case 'h5': return `${base} is-h5`;
+      case 'h6': return `${base} is-h6`;
+      case 'quote': return `${base} is-quote`;
+      case 'code': return `${base} is-code`;
+      case 'ul': return `${base} is-ul`;
+      case 'ol': return `${base} is-ol`;
+      default: return base;
+    }
+  };
+
+  // Inline HTML for rendering inline markdown
+  // We only render inline HTML for non-editable preview; for editing,
+  // the contenteditable shows plain text.
+  // When NOT focused, we show rendered HTML. When focused, we show raw text.
+  const shouldShowRendered = !isFocused && block.type !== 'code' && block.text.trim();
+
+  const renderedHtml = shouldShowRendered ? parseInlineMarkdown(block.text) : undefined;
+
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el || shouldShowRendered) return;
+
+    // Keep editable DOM text in sync with source block text.
+    // Only hydrate while not focused (or when an editable block starts empty)
+    // so typing does not reset the caret to the start.
+    const shouldHydrate = !isFocused || ((el.textContent ?? '') === '' && block.text.length > 0);
+    if (shouldHydrate && (el.textContent ?? '') !== block.text) {
+      el.textContent = block.text;
+    }
+  }, [block.text, shouldShowRendered, isFocused]);
+
+  const commonProps = {
+    ref: setRef as React.Ref<never>,
+    contentEditable: true as const,
+    suppressContentEditableWarning: true,
+    className: getBlockClass(),
+    'data-placeholder': placeholder,
+    'data-block-id': block.id,
+    onFocus: () => onFocus(block.id),
+    onBlur: () => {
+      onBlur();
+
+      if (skipNextBlurSyncRef.current) {
+        skipNextBlurSyncRef.current = false;
+        return;
+      }
+
+      // On blur, re-sync text from DOM
+      const el = elRef.current;
+      if (el) {
+        const text = el.textContent ?? '';
+        if (text !== lastTextRef.current) {
+          lastTextRef.current = text;
+          onTextChange(block.id, text);
+        }
+      }
+    },
+    onKeyDown: handleKeyDown,
+    onInput: handleInput,
+    onPaste: handlePaste,
+    onCompositionStart: () => { isComposingRef.current = true; },
+    onCompositionEnd: () => {
+      isComposingRef.current = false;
+      handleInput();
+    },
+    // When rendering inline HTML (not focused), we set dangerouslySetInnerHTML
+    // When focused or empty, we just set text content
+    ...(shouldShowRendered
+      ? { dangerouslySetInnerHTML: { __html: renderedHtml } }
+      : {}),
+    // Suppress warning for controlled/uncontrolled mismatch
+  };
+
+  // Wrap list items in appropriate container
+  if (block.type === 'ul') {
+    return (
+      <ul style={{ paddingLeft: '1.5em', listStyleType: 'disc' }}>
+        {React.createElement(tag, commonProps as never)}
+      </ul>
+    );
+  }
+  if (block.type === 'ol') {
+    return (
+      <ol style={{ paddingLeft: '1.5em', listStyleType: 'decimal' }}>
+        {React.createElement(tag, commonProps as never)}
+      </ol>
+    );
+  }
+
+  if (block.type === 'code') {
+    const selectedLanguage = (block.language || 'auto').toLowerCase();
+    return (
+      <div className="editor-code-wrap">
+        <div className="editor-code-header">
+          <label className="editor-code-language-pill" onMouseDown={(e) => e.stopPropagation()}>
+            <span className="editor-code-language-dot" aria-hidden="true" />
+            <select
+              value={selectedLanguage}
+              onChange={(e) => onCodeLanguageChange(block.id, e.target.value === 'auto' ? '' : e.target.value)}
+              className="editor-code-language-select"
+              aria-label="Code language"
+            >
+              {CODE_LANGUAGES.map((language) => (
+                <option key={language} value={language}>
+                  {LANGUAGE_LABELS[language] ?? language}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {isFocused ? (
+          <pre
+            ref={setRef as React.Ref<never>}
+            contentEditable
+            suppressContentEditableWarning
+            className="editor-block is-code"
+            data-placeholder={placeholder}
+            data-block-id={block.id}
+            onFocus={() => onFocus(block.id)}
+            onBlur={() => {
+              onBlur();
+              const el = elRef.current;
+              if (el) {
+                const text = el.textContent ?? '';
+                if (text !== lastTextRef.current) {
+                  lastTextRef.current = text;
+                  onTextChange(block.id, text);
+                }
+              }
+            }}
+            onKeyDown={handleKeyDown}
+            onInput={handleInput}
+            onPaste={handlePaste}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+              handleInput();
+            }}
+          />
+        ) : (
+          <pre
+            className="editor-block is-code hljs"
+            data-block-id={block.id}
+            onClick={() => onFocus(block.id)}
+          >
+            <code dangerouslySetInnerHTML={{ __html: highlightedCodeHtml }} />
+          </pre>
+        )}
+      </div>
+    );
+  }
+
+  if (block.type === 'hr') {
+    return <hr style={{ borderTop: '1px solid var(--border-default)', margin: '1.5em 0' }} />;
+  }
+
+  return React.createElement(tag, commonProps as never);
+});
+</file>
+
+<file path="components/Editor/Editor.tsx">
+'use client';
+
+import React, { useEffect, useCallback, useRef } from 'react';
+import { useMarkdownEditor } from './useMarkdownEditor';
+import { EditorBlock } from './EditorBlock';
+import { FloatingToolbar } from './FloatingToolbar';
+import { BlockType } from '@/lib/markdownTransform';
+
+interface EditorProps {
+  docId: string;
+  content: string;
+  contentWidth: string;
+  fontCss: string;
+  sidebarOffset: number;
+  onChange: (markdown: string) => void;
+}
+
+export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, onChange }: EditorProps) {
+  const prevDocIdRef = useRef(docId);
+
+  const {
+    blocks,
+    focusedBlockId,
+    setFocusedBlockId,
+    registerRef,
+    handleEnter,
+    handleTextChange,
+    handleBackspaceOnEmpty,
+    handleArrowNavigation,
+    handleImagePaste,
+    handleMarkdownPaste,
+    applyBlockFormat,
+    applyInlineFormat,
+    insertBlock,
+    updateCodeLanguage,
+    clearDocument,
+    undo,
+    redo,
+    loadContent,
+  } = useMarkdownEditor(content, onChange);
+
+  // Reload editor when document switches
+  useEffect(() => {
+    if (prevDocIdRef.current !== docId) {
+      prevDocIdRef.current = docId;
+      loadContent(content);
+    }
+  }, [docId, content, loadContent]);
+
+  // Click on the editor area below all blocks → focus last block
+  const handleEditorClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target === e.currentTarget) {
+        const lastBlock = blocks[blocks.length - 1];
+        if (lastBlock) {
+          const el = document.querySelector(`[data-block-id="${lastBlock.id}"]`) as HTMLElement;
+          el?.focus();
+        }
+      }
+    },
+    [blocks]
+  );
+
+  const handleToolbarFormat = useCallback(
+    (action: string, value?: string) => {
+      const inlineFormats = ['bold', 'italic', 'strikethrough', 'code', 'link'];
+      if (inlineFormats.includes(action)) {
+        applyInlineFormat(action);
+        return;
+      }
+      if (action === 'table') {
+        const tableTemplate = `| Column 1 | Column 2 | Column 3 |\n| -------- | -------- | -------- |\n| Cell     | Cell     | Cell     |`;
+        insertBlock('table', tableTemplate);
+        return;
+      }
+      if (action === 'image') {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0];
+          if (file && focusedBlockId) {
+            handleImagePaste(focusedBlockId, file);
+          }
+        };
+        input.click();
+        return;
+      }
+      if (action === 'hr') {
+        insertBlock('hr');
+        return;
+      }
+      if (action.startsWith('h')) {
+        applyBlockFormat(action as BlockType);
+        return;
+      }
+      applyBlockFormat(action as BlockType);
+    },
+    [applyBlockFormat, applyInlineFormat, insertBlock, focusedBlockId, handleImagePaste]
+  );
+
+  return (
+    <div
+      className="flex-1 overflow-y-auto relative"
+      style={{ background: 'var(--bg-editor)' }}
+    >
+      {/* Editor content area */}
+      <div
+        className="mx-auto px-8 pb-64 min-h-full cursor-text"
+        data-editor-doc="true"
+        style={{
+          maxWidth: contentWidth,
+          fontFamily: fontCss,
+          paddingTop: '64px',
+        }}
+        onClick={handleEditorClick}
+      >
+        {blocks.map((block, idx) => (
+          <EditorBlock
+            key={block.id}
+            block={block}
+            isFirst={idx === 0}
+            isFocused={focusedBlockId === block.id}
+            onFocus={setFocusedBlockId}
+            onBlur={() => {}} // keep focused id until another block takes focus
+            onTextChange={handleTextChange}
+            onEnter={handleEnter}
+            onBackspaceEmpty={handleBackspaceOnEmpty}
+            onArrow={handleArrowNavigation}
+            onImagePaste={handleImagePaste}
+            onMarkdownPaste={handleMarkdownPaste}
+            onCodeLanguageChange={updateCodeLanguage}
+            onClearDocument={clearDocument}
+            onUndo={undo}
+            onRedo={redo}
+            registerRef={registerRef}
+          />
+        ))}
+        {/* Spacer so the editor feels roomy */}
+        <div className="h-32" />
+      </div>
+
+      {/* Floating toolbar */}
+      <FloatingToolbar
+        focusedBlockId={focusedBlockId}
+        sidebarOffset={sidebarOffset}
+        onAction={handleToolbarFormat}
+      />
+    </div>
+  );
+}
+</file>
+
+<file path="components/Editor/FloatingToolbar.tsx">
+'use client';
+
+import React, { useState, useRef, useEffect } from 'react';
+
+interface FloatingToolbarProps {
+  focusedBlockId: string | null;
+  sidebarOffset: number;
+  onAction: (action: string, value?: string) => void;
+}
+
+interface ToolbarButton {
+  id: string;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+  action: string;
+  hasDropdown?: boolean;
+}
+
+function IconBold() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z" /><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z" />
+    </svg>
+  );
+}
+function IconItalic() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="19" y1="4" x2="10" y2="4" /><line x1="14" y1="20" x2="5" y2="20" /><line x1="15" y1="4" x2="9" y2="20" />
+    </svg>
+  );
+}
+function IconStrikethrough() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.3 4.9c-2.3-.6-4.4-1-6.2-.9-2.7 0-5.3.7-5.3 3.6 0 1.5 1.8 3.3 6 3.9h.9" />
+      <path d="M21 12H3" /><path d="M7 17c0 2.8 2.4 3.5 6.6 3.5 2.5 0 4.4-.6 6.3-1.9" />
+    </svg>
+  );
+}
+function IconCode() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+    </svg>
+  );
+}
+function IconLink() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+function IconQuote() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M3.691 6.292C5.094 4.771 7.217 4 10 4h1v2.819l-.804.161c-1.37.274-2.323.813-2.833 1.604A2.902 2.902 0 0 0 6.925 10H10a1 1 0 0 1 1 1v7c0 1.103-.897 2-2 2H3a1 1 0 0 1-1-1v-5l.003-2.919c-.009-.101-.04-1.01.205-2.16.175-.862.589-1.780 1.483-2.629zM20 4h1v2.819l-.804.161c-1.37.274-2.323.813-2.833 1.604A2.902 2.902 0 0 0 16.925 10H20a1 1 0 0 1 1 1v7c0 1.103-.897 2-2 2h-6a1 1 0 0 1-1-1v-5l.003-2.919c-.009-.101-.04-1.01.205-2.16.175-.862.589-1.780 1.483-2.629C15.094 4.771 17.217 4 20 4z" />
+    </svg>
+  );
+}
+function IconTable() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+    </svg>
+  );
+}
+function IconImage() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <polyline points="21 15 16 10 5 21" />
+    </svg>
+  );
+}
+function IconHeading() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12h16M4 6h16M4 18h16" />
+    </svg>
+  );
+}
+function IconChevronDown() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+export function FloatingToolbar({ focusedBlockId, sidebarOffset, onAction }: FloatingToolbarProps) {
+  const [headingOpen, setHeadingOpen] = useState(false);
+  const headingRef = useRef<HTMLDivElement>(null);
+
+  // Close heading dropdown on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (headingRef.current && !headingRef.current.contains(e.target as Node)) {
+        setHeadingOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const buttons = [
+    { id: 'heading', label: 'H', title: 'Heading', icon: <IconHeading />, action: 'heading', hasDropdown: true },
+    { id: 'bold', label: 'B', title: 'Bold', icon: <IconBold />, action: 'bold' },
+    { id: 'italic', label: 'I', title: 'Italic', icon: <IconItalic />, action: 'italic' },
+    { id: 'strikethrough', label: 'S', title: 'Strikethrough', icon: <IconStrikethrough />, action: 'strikethrough' },
+    { id: 'link', label: 'Link', title: 'Link', icon: <IconLink />, action: 'link' },
+    { id: 'quote', label: 'Quote', title: 'Quote', icon: <IconQuote />, action: 'quote' },
+    { id: 'code', label: 'Code', title: 'Inline Code', icon: <IconCode />, action: 'code' },
+    { id: 'table', label: 'Table', title: 'Table', icon: <IconTable />, action: 'table' },
+    { id: 'image', label: 'Image', title: 'Image', icon: <IconImage />, action: 'image' },
+  ] satisfies (ToolbarButton & { hasDropdown?: boolean })[];
+
+  return (
+    <div
+      className="fixed left-1/2 -translate-x-1/2 z-[80] glass"
+      style={{
+        left: `calc(50% + ${sidebarOffset / 2}px)`,
+        bottom: 'max(16px, env(safe-area-inset-bottom))',
+        background: 'var(--bg-toolbar)',
+        border: '1px solid var(--border-default)',
+        borderRadius: '12px',
+        padding: '6px 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '2px',
+      }}
+    >
+      {buttons.map((btn, idx) => {
+        const isHeading = btn.id === 'heading';
+
+        if (isHeading) {
+          return (
+            <div key={btn.id} ref={headingRef} style={{ position: 'relative' }}>
+              <button
+                title="Heading"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setHeadingOpen((v) => !v);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  padding: '6px 10px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  background: headingOpen ? 'var(--bg-active)' : 'transparent',
+                  color: headingOpen ? 'var(--accent)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontFamily: 'var(--font-ui)',
+                  fontWeight: '500',
+                  transition: 'all 0.12s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (!headingOpen) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!headingOpen) (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                }}
+              >
+                <IconHeading />
+                <IconChevronDown />
+              </button>
+
+              {headingOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 'calc(100% + 8px)',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'var(--bg-toolbar)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: '10px',
+                    boxShadow: 'var(--shadow-modal)',
+                    padding: '6px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    minWidth: '120px',
+                    backdropFilter: 'blur(12px)',
+                    WebkitBackdropFilter: 'blur(12px)',
+                  }}
+                >
+                  {[1, 2, 3, 4, 5, 6].map((level) => (
+                    <button
+                      key={level}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        onAction(`h${level}`);
+                        setHeadingOpen(false);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '7px 10px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--text-primary)',
+                        cursor: 'pointer',
+                        fontFamily: 'var(--font-ui)',
+                        fontSize: level <= 2 ? `${16 - (level - 1) * 1}px` : '13px',
+                        fontWeight: level <= 3 ? '600' : '500',
+                        textAlign: 'left',
+                        width: '100%',
+                        transition: 'background 0.1s',
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                    >
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: '600', minWidth: '24px' }}>H{level}</span>
+                      Heading {level}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        // Divider before image
+        const showDivider = btn.id === 'image' || btn.id === 'quote';
+
+        return (
+          <React.Fragment key={btn.id}>
+            {showDivider && (
+              <div
+                style={{
+                  width: '1px',
+                  height: '20px',
+                  background: 'var(--border-default)',
+                  margin: '0 4px',
+                }}
+              />
+            )}
+            <button
+              title={btn.title}
+              onMouseDown={(e) => {
+                e.preventDefault(); // Prevent focus loss
+                onAction(btn.action);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '34px',
+                height: '34px',
+                borderRadius: '7px',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.12s ease',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
+              }}
+            >
+              {btn.icon}
+            </button>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+</file>
+
+<file path="components/Editor/useMarkdownEditor.ts">
+'use client';
+
+import { useState, useCallback, useRef } from 'react';
+import {
+  BlockType,
+  ParsedBlock,
+  detectBlockType,
+  parseMarkdownToBlocks,
+  blocksToMarkdown,
+} from '@/lib/markdownTransform';
+
+let idCounter = 0;
+function newId() {
+  return `b_${Date.now()}_${idCounter++}`;
+}
+
+function createBlock(type: BlockType = 'p', text = ''): ParsedBlock {
+  return { id: newId(), type, text, raw: '', language: undefined };
+}
+
+export function useMarkdownEditor(
+  initialContent: string,
+  onChange: (markdown: string) => void
+) {
+  const [blocks, setBlocks] = useState<ParsedBlock[]>(() => {
+    const parsed = parseMarkdownToBlocks(initialContent);
+    return parsed.length > 0 ? parsed : [createBlock('h1')];
+  });
+  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
+  const blockRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const undoStackRef = useRef<ParsedBlock[][]>([]);
+  const redoStackRef = useRef<ParsedBlock[][]>([]);
+  const isApplyingHistoryRef = useRef(false);
+
+  const cloneBlocks = useCallback((items: ParsedBlock[]) => items.map((b) => ({ ...b })), []);
+
+  // Sync blocks → markdown string (debounced by caller)
+  const syncToMarkdown = useCallback(
+    (updated: ParsedBlock[]) => {
+      onChange(blocksToMarkdown(updated));
+    },
+    [onChange]
+  );
+
+  const applyBlocksChange = useCallback(
+    (updater: (prev: ParsedBlock[]) => ParsedBlock[]) => {
+      setBlocks((prev) => {
+        const next = updater(prev);
+        if (next === prev) return prev;
+
+        if (!isApplyingHistoryRef.current) {
+          undoStackRef.current.push(cloneBlocks(prev));
+          if (undoStackRef.current.length > 200) {
+            undoStackRef.current.shift();
+          }
+          redoStackRef.current = [];
+        }
+
+        syncToMarkdown(next);
+        return next;
+      });
+    },
+    [cloneBlocks, syncToMarkdown]
+  );
+
+  // Register a block DOM ref
+  const registerRef = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) blockRefs.current.set(id, el);
+    else blockRefs.current.delete(id);
+  }, []);
+
+  // Focus a block by index or id
+  const focusBlock = useCallback((idOrIndex: string | number, atEnd = true) => {
+    let el: HTMLElement | undefined;
+    if (typeof idOrIndex === 'number') {
+      const b = blocks[idOrIndex];
+      if (b) el = blockRefs.current.get(b.id);
+    } else {
+      el = blockRefs.current.get(idOrIndex);
+    }
+    if (!el) return;
+    el.focus();
+    if (atEnd) {
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    } else {
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.setStart(el, 0);
+      range.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+  }, [blocks]);
+
+  /**
+   * Called when the user presses Enter in a block.
+   * Splits the block or creates a new one below.
+   */
+  const handleEnter = useCallback(
+    (blockId: string, currentText: string, caretOffset: number) => {
+      applyBlocksChange((prev) => {
+        const idx = prev.findIndex((b) => b.id === blockId);
+        if (idx === -1) return prev;
+
+        const current = prev[idx];
+        const splitAt = Math.max(0, Math.min(caretOffset, currentText.length));
+        const beforeText = currentText.slice(0, splitAt);
+        const afterText = currentText.slice(splitAt);
+
+        const newBlock = createBlock('p', afterText);
+
+        // For list blocks, continue the list if there's text
+        if ((current.type === 'ul' || current.type === 'ol') && beforeText.trim()) {
+          newBlock.type = current.type;
+        }
+
+        const updatedCurrent: ParsedBlock = {
+          ...current,
+          text: beforeText,
+          raw: beforeText,
+        };
+
+        const updated = [
+          ...prev.slice(0, idx),
+          updatedCurrent,
+          newBlock,
+          ...prev.slice(idx + 1),
+        ];
+
+        // Focus new block after render
+        requestAnimationFrame(() => focusBlock(newBlock.id, false));
+        return updated;
+      });
+    },
+    [applyBlocksChange, focusBlock]
+  );
+
+  /**
+   * Called on every keystroke.
+   * Checks if the typed text matches a markdown prefix and
+   * transforms the block type if it does.
+   */
+  const handleTextChange = useCallback(
+    (blockId: string, rawText: string) => {
+      applyBlocksChange((prev) => {
+        const idx = prev.findIndex((b) => b.id === blockId);
+        if (idx === -1) return prev;
+
+        const detected = detectBlockType(rawText);
+        let updated: ParsedBlock[];
+
+        if (detected && detected.type !== 'p') {
+          // Transform block type and strip the prefix
+          updated = prev.map((b, i) =>
+            i === idx
+              ? { ...b, type: detected.type, text: detected.text, raw: rawText, language: detected.language }
+              : b
+          );
+
+          // Clear the DOM element and set cursor after transform
+          requestAnimationFrame(() => {
+            const el = blockRefs.current.get(blockId);
+            if (el) {
+              el.textContent = detected.text;
+              // Move cursor to end
+              const range = document.createRange();
+              const sel = window.getSelection();
+              range.selectNodeContents(el);
+              range.collapse(false);
+              sel?.removeAllRanges();
+              sel?.addRange(range);
+            }
+          });
+        } else {
+          updated = prev.map((b, i) =>
+            i === idx ? { ...b, text: rawText, raw: rawText } : b
+          );
+        }
+
+        return updated;
+      });
+    },
+    [applyBlocksChange]
+  );
+
+  /**
+   * Called when the user presses Backspace on an empty block.
+   * If the block has a non-'p' type, revert to 'p'.
+   * If it's 'p' and not the first block, merge with previous or delete.
+   */
+  const handleBackspaceOnEmpty = useCallback(
+    (blockId: string) => {
+      applyBlocksChange((prev) => {
+        const idx = prev.findIndex((b) => b.id === blockId);
+        if (idx === -1) return prev;
+
+        const block = prev[idx];
+
+        // Revert block type to paragraph
+        if (block.type !== 'p') {
+          const updated = prev.map((b, i) =>
+            i === idx ? { ...b, type: 'p' as BlockType, text: '', raw: '', language: undefined } : b
+          );
+          return updated;
+        }
+
+        // Can't delete the only block
+        if (prev.length === 1) return prev;
+
+        // Delete block and focus previous
+        const updated = prev.filter((_, i) => i !== idx);
+
+        const prevBlock = updated[Math.max(0, idx - 1)];
+        requestAnimationFrame(() => {
+          if (prevBlock) focusBlock(prevBlock.id, true);
+        });
+
+        return updated;
+      });
+    },
+    [applyBlocksChange, focusBlock]
+  );
+
+  /**
+   * Navigate between blocks with arrow keys.
+   */
+  const handleArrowNavigation = useCallback(
+    (blockId: string, direction: 'up' | 'down') => {
+      const idx = blocks.findIndex((b) => b.id === blockId);
+      if (idx === -1) return;
+      if (direction === 'up' && idx > 0) focusBlock(blocks[idx - 1].id, true);
+      if (direction === 'down' && idx < blocks.length - 1) focusBlock(blocks[idx + 1].id, true);
+    },
+    [blocks, focusBlock]
+  );
+
+  /**
+   * Handle image paste from clipboard.
+   */
+  const handleImagePaste = useCallback(
+    (blockId: string, file: File): boolean => {
+      if (!file.type.startsWith('image/')) return false;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        if (!dataUrl) return;
+        const imageBlock: ParsedBlock = {
+          id: newId(),
+          type: 'p',
+          // Store as markdown image syntax
+          text: `![Pasted image](${dataUrl})`,
+          raw: `![Pasted image](${dataUrl})`,
+        };
+        applyBlocksChange((prev) => {
+          const idx = prev.findIndex((b) => b.id === blockId);
+          const updated = [
+            ...prev.slice(0, idx + 1),
+            imageBlock,
+            ...prev.slice(idx + 1),
+          ];
+          requestAnimationFrame(() => focusBlock(imageBlock.id, true));
+          return updated;
+        });
+      };
+      reader.readAsDataURL(file);
+      return true;
+    },
+    [applyBlocksChange, focusBlock]
+  );
+
+  /**
+   * Handle pasted markdown text — parse into blocks and insert.
+   */
+  const handleMarkdownPaste = useCallback(
+    (blockId: string, markdownText: string) => {
+      const pastedBlocks = parseMarkdownToBlocks(markdownText).map((b) => ({
+        ...b,
+        id: newId(),
+      }));
+      if (pastedBlocks.length === 0) return false;
+
+      applyBlocksChange((prev) => {
+        const idx = prev.findIndex((b) => b.id === blockId);
+        if (idx === -1) return prev;
+
+        const target = prev[idx];
+        const shouldReplaceTarget = !target.text.trim() && (target.type === 'p' || target.type === 'h1');
+        const insertStart = shouldReplaceTarget ? idx : idx + 1;
+        const tailStart = idx + 1;
+
+        const updated = [
+          ...prev.slice(0, insertStart),
+          ...pastedBlocks,
+          ...prev.slice(tailStart),
+        ];
+        const lastPasted = pastedBlocks[pastedBlocks.length - 1];
+        requestAnimationFrame(() => focusBlock(lastPasted.id, true));
+        return updated;
+      });
+      return true;
+    },
+    [applyBlocksChange, focusBlock]
+  );
+
+  /**
+   * Apply a format to the currently focused block (from toolbar).
+   */
+  const applyBlockFormat = useCallback(
+    (type: BlockType) => {
+      if (!focusedBlockId) return;
+      applyBlocksChange((prev) => {
+        const updated = prev.map((b) =>
+          b.id === focusedBlockId
+            ? {
+                ...b,
+                type,
+                language: type === 'code' ? b.language ?? 'plaintext' : undefined,
+              }
+            : b
+        );
+        return updated;
+      });
+      requestAnimationFrame(() => {
+        if (focusedBlockId) focusBlock(focusedBlockId, true);
+      });
+    },
+    [focusedBlockId, applyBlocksChange, focusBlock]
+  );
+
+  /**
+   * Insert inline markdown around the current selection.
+   */
+  const applyInlineFormat = useCallback((format: string) => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const selectedText = range.toString();
+
+    const wrapMap: Record<string, [string, string]> = {
+      bold: ['**', '**'],
+      italic: ['*', '*'],
+      strikethrough: ['~~', '~~'],
+      code: ['`', '`'],
+      link: ['[', '](url)'],
+    };
+
+    const [before, after] = wrapMap[format] ?? ['', ''];
+    if (!before) return;
+
+    const wrapped = `${before}${selectedText || format}${after}`;
+    document.execCommand('insertText', false, wrapped);
+  }, []);
+
+  /**
+   * Insert a new block of a given type at the current position.
+   */
+  const insertBlock = useCallback(
+    (type: BlockType, text = '') => {
+      const insertAfter = focusedBlockId;
+      applyBlocksChange((prev) => {
+        const idx = insertAfter
+          ? prev.findIndex((b) => b.id === insertAfter)
+          : prev.length - 1;
+        const newBlock = createBlock(type, text);
+        if (type === 'code') {
+          newBlock.language = 'plaintext';
+        }
+        const updated = [
+          ...prev.slice(0, idx + 1),
+          newBlock,
+          ...prev.slice(idx + 1),
+        ];
+        requestAnimationFrame(() => focusBlock(newBlock.id, true));
+        return updated;
+      });
+    },
+    [focusedBlockId, applyBlocksChange, focusBlock]
+  );
+
+  const updateCodeLanguage = useCallback(
+    (blockId: string, language: string) => {
+      applyBlocksChange((prev) => {
+        const updated = prev.map((b) =>
+          b.id === blockId
+            ? { ...b, language: language.trim() ? language : undefined }
+            : b
+        );
+        return updated;
+      });
+    },
+    [applyBlocksChange]
+  );
+
+  const clearDocument = useCallback(() => {
+    applyBlocksChange(() => [createBlock('h1', '')]);
+    requestAnimationFrame(() => setFocusedBlockId(null));
+  }, [applyBlocksChange]);
+
+  const undo = useCallback(() => {
+    setBlocks((prev) => {
+      const previous = undoStackRef.current.pop();
+      if (!previous) return prev;
+
+      isApplyingHistoryRef.current = true;
+      redoStackRef.current.push(cloneBlocks(prev));
+      const restored = cloneBlocks(previous);
+      syncToMarkdown(restored);
+      isApplyingHistoryRef.current = false;
+      return restored;
+    });
+    requestAnimationFrame(() => setFocusedBlockId(null));
+  }, [cloneBlocks, syncToMarkdown]);
+
+  const redo = useCallback(() => {
+    setBlocks((prev) => {
+      const next = redoStackRef.current.pop();
+      if (!next) return prev;
+
+      isApplyingHistoryRef.current = true;
+      undoStackRef.current.push(cloneBlocks(prev));
+      const restored = cloneBlocks(next);
+      syncToMarkdown(restored);
+      isApplyingHistoryRef.current = false;
+      return restored;
+    });
+    requestAnimationFrame(() => setFocusedBlockId(null));
+  }, [cloneBlocks, syncToMarkdown]);
+
+  /**
+   * Reload blocks from new content (when switching documents).
+   */
+  const loadContent = useCallback((content: string) => {
+    const parsed = parseMarkdownToBlocks(content);
+    setBlocks(parsed.length > 0 ? parsed : [createBlock('h1')]);
+    setFocusedBlockId(null);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+  }, []);
+
+  return {
+    blocks,
+    focusedBlockId,
+    setFocusedBlockId,
+    registerRef,
+    handleEnter,
+    handleTextChange,
+    handleBackspaceOnEmpty,
+    handleArrowNavigation,
+    handleImagePaste,
+    handleMarkdownPaste,
+    applyBlockFormat,
+    applyInlineFormat,
+    insertBlock,
+    updateCodeLanguage,
+    clearDocument,
+    undo,
+    redo,
+    loadContent,
+  };
+}
+</file>
+
+<file path="components/modals/ExportModal.tsx">
+'use client';
+
+import React, { useEffect, useRef } from 'react';
+import { Document } from '@/hooks/useDocuments';
+import { ParsedBlock, parseMarkdownToBlocks } from '@/lib/markdownTransform';
+import {
+  exportAsMarkdown,
+  exportAsPdf,
+  exportAsRtf,
+  exportAsDocx,
+} from '@/lib/exportUtils';
+
+interface ExportModalProps {
+  isOpen: boolean;
+  document: Document | null;
+  onClose: () => void;
+}
+
+interface ExportOption {
+  id: string;
+  format: string;
+  description: string;
+  ext: string;
+  note?: string;
+}
+
+const EXPORT_OPTIONS: ExportOption[] = [
+  {
+    id: 'docx',
+    format: 'Word Document',
+    description: 'Compatible with Microsoft Word and Google Docs',
+    ext: 'DOCX',
+    note: 'Requires docx package',
+  },
+  {
+    id: 'pdf',
+    format: 'PDF',
+    description: 'Opens print dialog — save as PDF',
+    ext: 'PDF',
+  },
+  {
+    id: 'rtf',
+    format: 'Rich Text Format',
+    description: 'Compatible with most word processors',
+    ext: 'RTF',
+  },
+  {
+    id: 'md',
+    format: 'Markdown',
+    description: 'Raw markdown text file',
+    ext: 'MD',
+  },
+];
+
+function IconX() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+function IconDownload() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+export function ExportModal({ isOpen, document, onClose }: ExportModalProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handler(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isOpen, onClose]);
+
+  if (!isOpen || !document) return null;
+
+  async function handleExport(format: string) {
+    if (!document) return;
+    const blocks: ParsedBlock[] = parseMarkdownToBlocks(document.content);
+    const title = document.title || 'Untitled';
+
+    switch (format) {
+      case 'md':
+        exportAsMarkdown(title, document.content);
+        break;
+      case 'pdf':
+        exportAsPdf(title, blocks);
+        break;
+      case 'rtf':
+        exportAsRtf(title, blocks);
+        break;
+      case 'docx':
+        await exportAsDocx(title, blocks);
+        break;
+    }
+    onClose();
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      className="modal-backdrop"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}
+      onClick={(e) => {
+        if (e.target === overlayRef.current) onClose();
+      }}
+    >
+      <div
+        style={{
+          background: 'var(--bg-modal)',
+          border: '1px solid var(--border-default)',
+          borderRadius: '16px',
+          boxShadow: 'var(--shadow-modal)',
+          width: '100%',
+          maxWidth: '420px',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '20px 20px 16px',
+          borderBottom: '1px solid var(--border-default)',
+        }}>
+          <div>
+            <h2 style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)', marginBottom: '2px' }}>
+              Export Document
+            </h2>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+              {document.title || 'Untitled'}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: '32px', height: '32px', borderRadius: '8px',
+              border: 'none', background: 'transparent',
+              color: 'var(--text-muted)', cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            <IconX />
+          </button>
+        </div>
+
+        {/* Export options */}
+        <div style={{ padding: '12px' }}>
+          {EXPORT_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => handleExport(opt.id)}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '14px',
+                padding: '14px 16px',
+                borderRadius: '10px',
+                border: '1px solid transparent',
+                background: 'transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.12s',
+                marginBottom: '4px',
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.background = 'var(--bg-hover)';
+                el.style.borderColor = 'var(--border-default)';
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.background = 'transparent';
+                el.style.borderColor = 'transparent';
+              }}
+            >
+              {/* Badge */}
+              <div style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '10px',
+                background: 'var(--bg-active)',
+                border: '1px solid var(--border-default)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '10px',
+                fontWeight: '700',
+                fontFamily: 'var(--font-ui)',
+                color: 'var(--accent)',
+                letterSpacing: '0.05em',
+                flexShrink: 0,
+              }}>
+                {opt.ext}
+              </div>
+
+              <div style={{ flex: 1 }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '2px',
+                }}>
+                  <span style={{ fontSize: '14px', fontWeight: '500', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)' }}>
+                    {opt.format}
+                  </span>
+                  {opt.note && (
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', padding: '1px 6px', borderRadius: '100px', border: '1px solid var(--border-default)' }}>
+                      {opt.note}
+                    </span>
+                  )}
+                </div>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+                  {opt.description}
+                </p>
+              </div>
+
+              <div style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+                <IconDownload />
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="components/modals/PreferencesModal.tsx">
+'use client';
+
+import React, { useEffect, useRef } from 'react';
+import { Preferences, FontFamily, ContentWidth, ColorTheme } from '@/hooks/usePreferences';
+
+interface PreferencesModalProps {
+  isOpen: boolean;
+  preferences: Preferences;
+  onClose: () => void;
+  onUpdate: (updates: Partial<Preferences>) => void;
+}
+
+function IconX() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+interface OptionChipProps {
+  label: string;
+  subtitle?: string;
+  isActive: boolean;
+  onClick: () => void;
+  preview?: React.ReactNode;
+}
+
+function OptionChip({ label, subtitle, isActive, onClick, preview }: OptionChipProps) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '12px 8px',
+        borderRadius: '10px',
+        border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border-default)'}`,
+        background: isActive ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'transparent',
+        cursor: 'pointer',
+        transition: 'all 0.14s',
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+      }}
+    >
+      {preview && <div style={{ marginBottom: '2px' }}>{preview}</div>}
+      <span style={{
+        fontSize: '12px',
+        fontWeight: isActive ? '600' : '500',
+        color: isActive ? 'var(--accent)' : 'var(--text-primary)',
+        fontFamily: 'var(--font-ui)',
+      }}>
+        {label}
+      </span>
+      {subtitle && (
+        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+          {subtitle}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p style={{
+      fontSize: '11px',
+      fontWeight: '600',
+      color: 'var(--text-muted)',
+      fontFamily: 'var(--font-ui)',
+      letterSpacing: '0.06em',
+      textTransform: 'uppercase',
+      marginBottom: '10px',
+    }}>
+      {children}
+    </p>
+  );
+}
+
+export function PreferencesModal({ isOpen, preferences, onClose, onUpdate }: PreferencesModalProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handler(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  // Theme previews
+  const themeColors: Record<ColorTheme, { bg: string; text: string; border: string }> = {
+    light: { bg: '#ffffff', text: '#1a1916', border: '#e5e4e0' },
+    dark: { bg: '#1a1917', text: '#e8e6e1', border: '#2a2926' },
+    sepia: { bg: '#faf7f2', text: '#2c2416', border: '#ede8dc' },
+  };
+
+  return (
+    <div
+      ref={overlayRef}
+      className="modal-backdrop"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}
+      onClick={(e) => {
+        if (e.target === overlayRef.current) onClose();
+      }}
+    >
+      <div
+        style={{
+          background: 'var(--bg-modal)',
+          border: '1px solid var(--border-default)',
+          borderRadius: '16px',
+          boxShadow: 'var(--shadow-modal)',
+          width: '100%',
+          maxWidth: '440px',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '20px 20px 16px',
+          borderBottom: '1px solid var(--border-default)',
+        }}>
+          <h2 style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)' }}>
+            Preferences
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: '32px', height: '32px', borderRadius: '8px',
+              border: 'none', background: 'transparent',
+              color: 'var(--text-muted)', cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            <IconX />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+
+          {/* Font */}
+          <div>
+            <SectionLabel>Editor Font</SectionLabel>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {(['fraunces', 'inter'] as FontFamily[]).map((font) => (
+                <OptionChip
+                  key={font}
+                  label={font === 'fraunces' ? 'Fraunces' : 'Inter'}
+                  subtitle={font === 'fraunces' ? 'Serif' : 'Sans-serif'}
+                  isActive={preferences.font === font}
+                  onClick={() => onUpdate({ font })}
+                  preview={
+                    <span style={{
+                      fontFamily: font === 'fraunces' ? "'Fraunces', serif" : "'Inter', sans-serif",
+                      fontSize: '22px',
+                      fontWeight: font === 'fraunces' ? '300' : '400',
+                      color: 'var(--text-primary)',
+                      lineHeight: 1,
+                    }}>
+                      Aa
+                    </span>
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Content width */}
+          <div>
+            <SectionLabel>Content Width</SectionLabel>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {([
+                { id: 'narrow', label: 'Narrow', sub: '560px' },
+                { id: 'medium', label: 'Medium', sub: '720px' },
+                { id: 'wide', label: 'Wide', sub: '960px' },
+              ] as { id: ContentWidth; label: string; sub: string }[]).map((opt) => (
+                <OptionChip
+                  key={opt.id}
+                  label={opt.label}
+                  subtitle={opt.sub}
+                  isActive={preferences.width === opt.id}
+                  onClick={() => onUpdate({ width: opt.id })}
+                  preview={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'center' }}>
+                      {[1, 0.75, 0.88].map((w, i) => (
+                        <div key={i} style={{
+                          height: '2px',
+                          borderRadius: '1px',
+                          background: 'var(--border-strong)',
+                          width: `${(opt.id === 'narrow' ? 20 : opt.id === 'medium' ? 28 : 36) * w}px`,
+                        }} />
+                      ))}
+                    </div>
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Theme */}
+          <div>
+            <SectionLabel>Color Theme</SectionLabel>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {(['light', 'dark', 'sepia'] as ColorTheme[]).map((theme) => {
+                const colors = themeColors[theme];
+                return (
+                  <OptionChip
+                    key={theme}
+                    label={theme.charAt(0).toUpperCase() + theme.slice(1)}
+                    isActive={preferences.theme === theme}
+                    onClick={() => onUpdate({ theme })}
+                    preview={
+                      <div style={{
+                        width: '40px',
+                        height: '28px',
+                        borderRadius: '6px',
+                        background: colors.bg,
+                        border: `1px solid ${colors.border}`,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'center',
+                        gap: '3px',
+                        padding: '4px 5px',
+                        overflow: 'hidden',
+                      }}>
+                        {[1, 0.7].map((w, i) => (
+                          <div key={i} style={{
+                            height: '2px',
+                            borderRadius: '1px',
+                            background: colors.text,
+                            width: `${w * 100}%`,
+                            opacity: 0.6,
+                          }} />
+                        ))}
+                      </div>
+                    }
+                  />
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: '14px 20px',
+          borderTop: '1px solid var(--border-default)',
+          display: 'flex',
+          justifyContent: 'flex-end',
+        }}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: '8px 20px',
+              borderRadius: '8px',
+              border: 'none',
+              background: 'var(--accent)',
+              color: 'white',
+              fontSize: '13px',
+              fontWeight: '600',
+              fontFamily: 'var(--font-ui)',
+              cursor: 'pointer',
+              transition: 'opacity 0.12s',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.85'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1'; }}
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="components/Sidebar.tsx">
+'use client';
+
+import React, { useEffect } from 'react';
+import { Document } from '@/hooks/useDocuments';
+
+interface SidebarProps {
+  isOpen: boolean;
+  documents: Document[];
+  activeDocId: string | null;
+  onClose: () => void;
+  onOpen: (id: string) => void;
+  onCreate: () => void;
+  onDelete: (id: string) => void;
+  onExport: (id: string) => void;
+}
+
+function IconPlus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+function IconClose() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+function IconDoc() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
+}
+function IconTrash() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
+  );
+}
+function IconDownload() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+function formatDate(ts: number): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function getWordCount(content: string): number {
+  return content.trim() ? content.trim().split(/\s+/).length : 0;
+}
+
+export function Sidebar({
+  isOpen,
+  documents,
+  activeDocId,
+  onClose,
+  onOpen,
+  onCreate,
+  onDelete,
+  onExport,
+}: SidebarProps) {
+  // Close on Escape
+  useEffect(() => {
+    if (!isOpen) return;
+    function handler(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [isOpen, onClose]);
+
+  return (
+    <aside
+      aria-hidden={!isOpen}
+      style={{
+        display: 'flex',
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          width: isOpen ? '300px' : '0px',
+          minWidth: isOpen ? '300px' : '0px',
+          opacity: isOpen ? 1 : 0,
+          overflow: 'hidden',
+          background: 'var(--bg-sidebar)',
+          borderRight: '1px solid var(--border-default)',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease',
+          pointerEvents: isOpen ? 'auto' : 'none',
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 12px',
+            minHeight: '50px',
+            borderBottom: '1px solid var(--border-default)',
+          }}
+        >
+          <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)' }}>
+            Documents
+          </span>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={onCreate}
+              title="New document"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '5px 10px',
+                borderRadius: '7px',
+                border: '1px solid var(--border-default)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontFamily: 'var(--font-ui)',
+                fontWeight: '500',
+                transition: 'all 0.12s',
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.background = 'var(--bg-hover)';
+                el.style.color = 'var(--text-primary)';
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.background = 'transparent';
+                el.style.color = 'var(--text-secondary)';
+              }}
+            >
+              <IconPlus /> New
+            </button>
+            <button
+              onClick={onClose}
+              title="Close"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '30px',
+                height: '30px',
+                borderRadius: '7px',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                transition: 'all 0.12s',
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.background = 'var(--bg-hover)';
+                el.style.color = 'var(--text-primary)';
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.background = 'transparent';
+                el.style.color = 'var(--text-muted)';
+              }}
+            >
+              <IconClose />
+            </button>
+          </div>
+        </div>
+
+        {/* Document list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+          {documents.length === 0 ? (
+            <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', padding: '24px', fontFamily: 'var(--font-ui)' }}>
+              No documents yet
+            </p>
+          ) : (
+            documents.map((doc) => {
+              const isActive = doc.id === activeDocId;
+              const wordCount = getWordCount(doc.content);
+              return (
+                <div
+                  key={doc.id}
+                  style={{
+                    borderRadius: '8px',
+                    marginBottom: '2px',
+                    background: isActive ? 'var(--bg-active)' : 'transparent',
+                    border: `1px solid ${isActive ? 'var(--border-strong)' : 'transparent'}`,
+                    transition: 'all 0.12s',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Main clickable area */}
+                  <button
+                    onClick={() => {
+                      onOpen(doc.id);
+                    }}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      padding: '10px 12px 8px',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ paddingTop: '1px', color: isActive ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0 }}>
+                      <IconDoc />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{
+                        fontSize: '13px',
+                        fontWeight: isActive ? '600' : '500',
+                        color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        fontFamily: 'var(--font-ui)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        marginBottom: '2px',
+                      }}>
+                        {doc.title || 'Untitled'}
+                      </p>
+                      <p style={{
+                        fontSize: '11px',
+                        color: 'var(--text-muted)',
+                        fontFamily: 'var(--font-ui)',
+                      }}>
+                        {formatDate(doc.updatedAt)} · {wordCount} {wordCount === 1 ? 'word' : 'words'}
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Action buttons */}
+                  <div style={{ display: 'flex', gap: '4px', padding: '0 8px 8px', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onExport(doc.id); }}
+                      title="Export"
+                      style={actionBtnStyle}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; }}
+                    >
+                      <IconDownload />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Delete "${doc.title || 'Untitled'}"?`)) {
+                          onDelete(doc.id);
+                        }
+                      }}
+                      title="Delete"
+                      style={actionBtnStyle}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(239,68,68,0.1)'; (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; }}
+                    >
+                      <IconTrash />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: '18px',
+          borderTop: '1px solid var(--border-default)',
+          fontSize: '12px',
+          color: 'var(--text-muted)',
+          fontFamily: 'var(--font-ui)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          alignItems: 'flex-start',
+        }}>
+          <p style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)' }}>MyDoc</p>
+          <p style={{ lineHeight: 1.45 }}>
+            An open-source markdown based editor designed for simplicity. Everything is autosaved locally and never leaves your device.
+          </p>
+          <p style={{ lineHeight: 1, fontSize: '11px' }}>
+            Developed by {' '}
+            <a
+              href="https://emjjkk.tech"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#ffffff', textDecoration: 'underline', textUnderlineOffset: '2px' }}
+            >
+              @emjjkk
+            </a>
+          </p>
+          <p style={{ lineHeight: 1, fontSize: '11px' }}>
+            Github repo {' '}
+            <a
+              href="https://github.com/emjjkk/mydoc"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#ffffff', textDecoration: 'underline', textUnderlineOffset: '2px' }}
+            >
+              emjjkk/mydoc
+            </a>
+          </p>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+const actionBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '26px',
+  height: '26px',
+  borderRadius: '6px',
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  cursor: 'pointer',
+  transition: 'all 0.12s',
+};
+</file>
+
+<file path="components/TopBar.tsx">
+'use client';
+
+import React, { useState, useRef, useCallback } from 'react';
+
+interface TopBarProps {
+  title: string;
+  onTitleChange: (title: string) => void;
+  onMenuToggle: () => void;
+  onExport: () => void;
+  onPreferences: () => void;
+}
+
+function IconMenu() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
+
+function IconDownload() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+function IconSettings() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+export function TopBar({ title, onTitleChange, onMenuToggle, onExport, onPreferences }: TopBarProps) {
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  const handleTitleBlur = useCallback(() => {
+    setIsEditingTitle(false);
+    const val = titleRef.current?.value?.trim();
+    if (val !== undefined) {
+      onTitleChange(val || 'Untitled');
+    }
+  }, [onTitleChange]);
+
+  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      titleRef.current?.blur();
+    }
+    if (e.key === 'Escape') {
+      setIsEditingTitle(false);
+    }
+  }, []);
+
+  const btnStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '5px 9px',
+    borderRadius: '7px',
+    border: '1px solid var(--border-default)',
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontFamily: 'var(--font-ui)',
+    fontWeight: '500',
+    transition: 'all 0.12s ease',
+    whiteSpace: 'nowrap',
+  };
+
+  return (
+    <header
+      style={{
+        position: 'relative',
+        zIndex: 20,
+        display: 'grid',
+        gridTemplateColumns: '1fr auto 1fr',
+        alignItems: 'center',
+        padding: '10px 12px',
+        background: 'var(--bg-editor)',
+        borderBottom: '1px solid var(--border-default)',
+        minHeight: '50px',
+      }}
+    >
+      {/* Left: menu toggle */}
+      <div style={{ justifySelf: 'start' }}>
+        <button
+          onClick={onMenuToggle}
+          title="Open documents"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '30px',
+            height: '30px',
+            borderRadius: '7px',
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            flexShrink: 0,
+            transition: 'all 0.12s ease',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+            (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+            (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
+          }}
+        >
+          <IconMenu />
+        </button>
+      </div>
+
+      {/* Center: editable title */}
+      <div style={{ display: 'flex', justifyContent: 'center', minWidth: 0, maxWidth: '100%' }}>
+        {isEditingTitle ? (
+          <input
+            ref={titleRef}
+            defaultValue={title}
+            autoFocus
+            onBlur={handleTitleBlur}
+            onKeyDown={handleTitleKeyDown}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              textAlign: 'center',
+              fontSize: '14px',
+              fontWeight: '500',
+              fontFamily: 'var(--font-ui)',
+              color: 'var(--text-primary)',
+              width: '100%',
+              maxWidth: '400px',
+            }}
+          />
+        ) : (
+          <button
+            onClick={() => setIsEditingTitle(true)}
+            title="Click to rename"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'text',
+              fontSize: '14px',
+              fontWeight: '500',
+              fontFamily: 'var(--font-ui)',
+              color: 'var(--text-primary)',
+              padding: '3px 7px',
+              borderRadius: '6px',
+              transition: 'background 0.12s',
+              maxWidth: '400px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            {title || 'Untitled'}
+          </button>
+        )}
+      </div>
+
+      {/* Right: action buttons */}
+      <div style={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <button
+          onClick={onExport}
+          title="Export document"
+          style={btnStyle}
+          onMouseEnter={(e) => {
+            const el = e.currentTarget as HTMLButtonElement;
+            el.style.background = 'var(--bg-hover)';
+            el.style.color = 'var(--text-primary)';
+            el.style.borderColor = 'var(--border-strong)';
+          }}
+          onMouseLeave={(e) => {
+            const el = e.currentTarget as HTMLButtonElement;
+            el.style.background = 'transparent';
+            el.style.color = 'var(--text-secondary)';
+            el.style.borderColor = 'var(--border-default)';
+          }}
+        >
+          <IconDownload />
+          <span>Export</span>
+        </button>
+
+        <button
+          onClick={onPreferences}
+          title="Preferences"
+          style={{ ...btnStyle, padding: '6px' }}
+          onMouseEnter={(e) => {
+            const el = e.currentTarget as HTMLButtonElement;
+            el.style.background = 'var(--bg-hover)';
+            el.style.color = 'var(--text-primary)';
+            el.style.borderColor = 'var(--border-strong)';
+          }}
+          onMouseLeave={(e) => {
+            const el = e.currentTarget as HTMLButtonElement;
+            el.style.background = 'transparent';
+            el.style.color = 'var(--text-secondary)';
+            el.style.borderColor = 'var(--border-default)';
+          }}
+        >
+          <IconSettings />
+        </button>
+      </div>
+    </header>
+  );
+}
+</file>
+
+<file path="hooks/useDocuments.ts">
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+
+export interface Document {
+  id: string;
+  title: string;
+  content: string; // Raw markdown string
+  createdAt: number;
+  updatedAt: number;
+}
+
+const STORAGE_KEY = 'notes_documents';
+const ACTIVE_DOC_KEY = 'notes_active_doc';
+
+function generateId(): string {
+  return `doc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function createBlankDocument(id?: string): Document {
+  const now = Date.now();
+  return {
+    id: id ?? generateId(),
+    title: 'Untitled',
+    content: '',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function loadDocuments(): Document[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDocuments(docs: Document[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(docs));
+  } catch (e) {
+    console.error('Failed to save documents:', e);
+  }
+}
+
+function loadActiveDocId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(ACTIVE_DOC_KEY);
+}
+
+function saveActiveDocId(id: string) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(ACTIVE_DOC_KEY, id);
+}
+
+export function useDocuments() {
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    let docs = loadDocuments();
+    let activeId = loadActiveDocId();
+
+    // If no docs exist, create a blank one
+    if (docs.length === 0) {
+      const blank = createBlankDocument();
+      docs = [blank];
+      activeId = blank.id;
+      saveDocuments(docs);
+    }
+
+    // Validate activeId
+    if (!activeId || !docs.find((d) => d.id === activeId)) {
+      activeId = docs[0].id;
+    }
+
+    setDocuments(docs);
+    setActiveDocId(activeId);
+    saveActiveDocId(activeId);
+    setIsLoaded(true);
+  }, []);
+
+  const activeDocument = documents.find((d) => d.id === activeDocId) ?? null;
+
+  // Update a document's content (auto-save)
+  const updateDocument = useCallback(
+    (id: string, updates: Partial<Omit<Document, 'id' | 'createdAt'>>) => {
+      setDocuments((prev) => {
+        const next = prev.map((doc) =>
+          doc.id === id ? { ...doc, ...updates, updatedAt: Date.now() } : doc
+        );
+        saveDocuments(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  // Create a new blank document
+  const createDocument = useCallback(() => {
+    const blank = createBlankDocument();
+    setDocuments((prev) => {
+      const next = [blank, ...prev];
+      saveDocuments(next);
+      return next;
+    });
+    setActiveDocId(blank.id);
+    saveActiveDocId(blank.id);
+    return blank;
+  }, []);
+
+  // Switch to a document
+  const openDocument = useCallback((id: string) => {
+    setActiveDocId(id);
+    saveActiveDocId(id);
+  }, []);
+
+  // Delete a document
+  const deleteDocument = useCallback(
+    (id: string) => {
+      setDocuments((prev) => {
+        const next = prev.filter((d) => d.id !== id);
+
+        // If deleting the active doc, switch to first remaining or create a new one
+        if (id === activeDocId) {
+          if (next.length > 0) {
+            setActiveDocId(next[0].id);
+            saveActiveDocId(next[0].id);
+          } else {
+            const blank = createBlankDocument();
+            next.push(blank);
+            setActiveDocId(blank.id);
+            saveActiveDocId(blank.id);
+          }
+        }
+
+        saveDocuments(next);
+        return next;
+      });
+    },
+    [activeDocId]
+  );
+
+  // Duplicate a document
+  const duplicateDocument = useCallback((id: string) => {
+    setDocuments((prev) => {
+      const source = prev.find((d) => d.id === id);
+      if (!source) return prev;
+      const copy: Document = {
+        ...source,
+        id: generateId(),
+        title: `${source.title} (Copy)`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      const next = [copy, ...prev];
+      saveDocuments(next);
+      setActiveDocId(copy.id);
+      saveActiveDocId(copy.id);
+      return next;
+    });
+  }, []);
+
+  return {
+    documents,
+    activeDocument,
+    activeDocId,
+    isLoaded,
+    updateDocument,
+    createDocument,
+    openDocument,
+    deleteDocument,
+    duplicateDocument,
+  };
+}
+</file>
+
+<file path="hooks/usePreferences.ts">
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+
+export type FontFamily = 'fraunces' | 'inter';
+export type ContentWidth = 'narrow' | 'medium' | 'wide';
+export type ColorTheme = 'light' | 'dark' | 'sepia';
+
+export interface Preferences {
+  font: FontFamily;
+  width: ContentWidth;
+  theme: ColorTheme;
+}
+
+const PREFS_KEY = 'notes_preferences';
+
+const CONTENT_WIDTH_MAP: Record<ContentWidth, string> = {
+  narrow: '560px',
+  medium: '720px',
+  wide: '960px',
+};
+
+const FONT_CSS_MAP: Record<FontFamily, string> = {
+  fraunces: "'Fraunces', serif",
+  inter: "'Inter', sans-serif",
+};
+
+function getSystemTheme(): ColorTheme {
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function loadPreferences(): Preferences {
+  if (typeof window === 'undefined') {
+    return { font: 'fraunces', width: 'medium', theme: 'light' };
+  }
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        font: parsed.font ?? 'fraunces',
+        width: parsed.width ?? 'medium',
+        theme: parsed.theme ?? getSystemTheme(),
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return { font: 'fraunces', width: 'medium', theme: getSystemTheme() };
+}
+
+export function usePreferences() {
+  const [preferences, setPreferences] = useState<Preferences>({
+    font: 'fraunces',
+    width: 'medium',
+    theme: 'light',
+  });
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    const prefs = loadPreferences();
+    setPreferences(prefs);
+    applyPreferences(prefs);
+    setIsLoaded(true);
+
+    // Listen for system theme changes
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e: MediaQueryListEvent) => {
+      setPreferences((prev) => {
+        // Only auto-switch if user hasn't overridden
+        const stored = loadPreferences();
+        if (!localStorage.getItem(PREFS_KEY)) {
+          const next = { ...prev, theme: e.matches ? ('dark' as ColorTheme) : ('light' as ColorTheme) };
+          applyPreferences(next);
+          return next;
+        }
+        return prev;
+      });
+    };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  function applyPreferences(prefs: Preferences) {
+    if (typeof window === 'undefined') return;
+    const root = document.documentElement;
+    root.setAttribute('data-theme', prefs.theme);
+    root.style.setProperty('--font-editor', FONT_CSS_MAP[prefs.font]);
+    root.style.setProperty('--content-width', CONTENT_WIDTH_MAP[prefs.width]);
+  }
+
+  const updatePreferences = useCallback((updates: Partial<Preferences>) => {
+    setPreferences((prev) => {
+      const next = { ...prev, ...updates };
+      applyPreferences(next);
+      try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
+  return {
+    preferences,
+    isLoaded,
+    updatePreferences,
+    contentWidthPx: CONTENT_WIDTH_MAP[preferences.width],
+    fontCss: FONT_CSS_MAP[preferences.font],
+  };
+}
+</file>
+
+<file path="lib/exportUtils.ts">
+/**
+ * exportUtils.ts
+ *
+ * Client-side export to:
+ *   - Markdown (.md)  — trivial string blob
+ *   - HTML            — used internally / as RTF base
+ *   - PDF             — via browser print dialog (print-to-PDF)
+ *   - RTF             — basic RTF wrapping of plain text
+ *   - DOCX            — uses docx npm package if available, else HTML fallback
+ *
+ * All exports happen entirely in the browser with no backend.
+ */
+
+import { parseInlineMarkdown, parseTableMarkdown, ParsedBlock } from './markdownTransform';
+
+// ─── Helper: trigger a file download ────────────────────────────────────────
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = window.document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function sanitizeFilename(title: string): string {
+  return title.replace(/[^a-z0-9_\-\s]/gi, '').trim().replace(/\s+/g, '_') || 'document';
+}
+
+// ─── Markdown export ─────────────────────────────────────────────────────────
+
+export function exportAsMarkdown(title: string, content: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  downloadBlob(blob, `${sanitizeFilename(title)}.md`);
+}
+
+// ─── Blocks → HTML ───────────────────────────────────────────────────────────
+
+export function blocksToHtml(blocks: ParsedBlock[], title: string): string {
+  const bodyHtml = blocks
+    .map((block) => {
+      switch (block.type) {
+        case 'h1': return `<h1>${parseInlineMarkdown(block.text)}</h1>`;
+        case 'h2': return `<h2>${parseInlineMarkdown(block.text)}</h2>`;
+        case 'h3': return `<h3>${parseInlineMarkdown(block.text)}</h3>`;
+        case 'h4': return `<h4>${parseInlineMarkdown(block.text)}</h4>`;
+        case 'h5': return `<h5>${parseInlineMarkdown(block.text)}</h5>`;
+        case 'h6': return `<h6>${parseInlineMarkdown(block.text)}</h6>`;
+        case 'ul': return `<ul><li>${parseInlineMarkdown(block.text)}</li></ul>`;
+        case 'ol': return `<ol><li>${parseInlineMarkdown(block.text)}</li></ol>`;
+        case 'quote': return `<blockquote><p>${parseInlineMarkdown(block.text)}</p></blockquote>`;
+        case 'code': return `<pre><code>${block.text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`;
+        case 'hr': return '<hr />';
+        case 'table': return parseTableMarkdown(block.text);
+        default: return block.text ? `<p>${parseInlineMarkdown(block.text)}</p>` : '';
+      }
+    })
+    .join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${title}</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 720px; margin: 40px auto; padding: 0 24px; line-height: 1.75; color: #1a1a1a; }
+    h1 { font-size: 2em; margin-bottom: 0.5em; }
+    h2 { font-size: 1.5em; margin-top: 1.5em; }
+    h3 { font-size: 1.25em; margin-top: 1.25em; }
+    blockquote { border-left: 3px solid #888; padding-left: 1em; color: #555; font-style: italic; }
+    pre { background: #f5f5f5; padding: 1em; border-radius: 4px; overflow-x: auto; }
+    code { font-family: monospace; background: #f5f5f5; padding: 2px 4px; border-radius: 3px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+    th { background: #f5f5f5; font-weight: 600; }
+    img { max-width: 100%; }
+    @media print { body { margin: 0; } }
+  </style>
+</head>
+<body>
+${bodyHtml}
+</body>
+</html>`;
+}
+
+// ─── PDF export ───────────────────────────────────────────────────────────────
+// Opens a new window with styled HTML and triggers print dialog.
+
+export function exportAsPdf(title: string, blocks: ParsedBlock[]) {
+  const html = blocksToHtml(blocks, title);
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    alert('Please allow popups to export as PDF.');
+    return;
+  }
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => {
+    printWindow.print();
+    printWindow.close();
+  }, 500);
+}
+
+// ─── RTF export ───────────────────────────────────────────────────────────────
+// Basic RTF. Handles headings, paragraphs, bold, italic, code.
+
+function escapeRtf(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    .replace(/[^\x00-\x7F]/g, (ch) => `\\u${ch.charCodeAt(0)}?`);
+}
+
+function inlineToRtf(text: string): string {
+  // Bold: **text**
+  text = text.replace(/\*\*(.+?)\*\*/g, '{\\b $1}');
+  // Italic: *text*
+  text = text.replace(/\*(.+?)\*/g, '{\\i $1}');
+  // Strikethrough: ~~text~~
+  text = text.replace(/~~(.+?)~~/g, '{\\strike $1}');
+  // Inline code: `code`
+  text = text.replace(/`([^`]+)`/g, '{\\f1 $1}');
+  return escapeRtf(text);
+}
+
+export function exportAsRtf(title: string, blocks: ParsedBlock[]) {
+  const rtfLines = [
+    '{\\rtf1\\ansi\\deff0',
+    '{\\fonttbl{\\f0 Georgia;}{\\f1 Courier New;}}',
+    '{\\colortbl;\\red26\\green26\\blue26;}',
+    '\\cf1\\f0\\fs28\\sl360\\slmult1',
+    '',
+  ];
+
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'h1':
+        rtfLines.push(`{\\b\\fs48 ${inlineToRtf(block.text)}}\\par\\par`);
+        break;
+      case 'h2':
+        rtfLines.push(`{\\b\\fs36 ${inlineToRtf(block.text)}}\\par\\par`);
+        break;
+      case 'h3':
+        rtfLines.push(`{\\b\\fs30 ${inlineToRtf(block.text)}}\\par\\par`);
+        break;
+      case 'h4':
+      case 'h5':
+      case 'h6':
+        rtfLines.push(`{\\b\\fs26 ${inlineToRtf(block.text)}}\\par\\par`);
+        break;
+      case 'ul':
+        rtfLines.push(`\\bullet\\tab ${inlineToRtf(block.text)}\\par`);
+        break;
+      case 'ol':
+        rtfLines.push(`\\pard\\fi-360\\li720 ${inlineToRtf(block.text)}\\par`);
+        break;
+      case 'quote':
+        rtfLines.push(`{\\i\\cf1 ${inlineToRtf(block.text)}}\\par\\par`);
+        break;
+      case 'code':
+        rtfLines.push(`{\\f1\\fs22 ${escapeRtf(block.text)}}\\par\\par`);
+        break;
+      case 'hr':
+        rtfLines.push('\\brdrb\\brdrs\\brdrw10\\brsp20 \\par');
+        break;
+      default:
+        if (block.text) {
+          rtfLines.push(`${inlineToRtf(block.text)}\\par\\par`);
+        }
+    }
+  }
+
+  rtfLines.push('}');
+  const rtf = rtfLines.join('\n');
+  const blob = new Blob([rtf], { type: 'application/rtf' });
+  downloadBlob(blob, `${sanitizeFilename(title)}.rtf`);
+}
+
+// ─── DOCX export ─────────────────────────────────────────────────────────────
+// Uses the 'docx' npm package. Falls back to HTML if not available.
+// 
+// To fully enable DOCX: npm install docx
+// The dynamic import below will work once the package is installed.
+
+export async function exportAsDocx(title: string, blocks: ParsedBlock[]) {
+  try {
+    // Dynamically import docx to keep bundle lean
+    const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = await import('docx');
+
+    const children: InstanceType<typeof Paragraph>[] = [];
+
+    for (const block of blocks) {
+      const text = block.text;
+
+      // Simple inline parser for docx TextRuns
+      function parseTextRuns(raw: string): InstanceType<typeof TextRun>[] {
+        const runs: InstanceType<typeof TextRun>[] = [];
+        // Very basic: split on bold/italic markers
+        const parts = raw.split(/(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`)/);
+        for (const part of parts) {
+          if (part.startsWith('**') && part.endsWith('**')) {
+            runs.push(new TextRun({ text: part.slice(2, -2), bold: true }));
+          } else if (part.startsWith('*') && part.endsWith('*')) {
+            runs.push(new TextRun({ text: part.slice(1, -1), italics: true }));
+          } else if (part.startsWith('~~') && part.endsWith('~~')) {
+            runs.push(new TextRun({ text: part.slice(2, -2), strike: true }));
+          } else if (part.startsWith('`') && part.endsWith('`')) {
+            runs.push(new TextRun({ text: part.slice(1, -1), font: 'Courier New', size: 18 }));
+          } else if (part) {
+            runs.push(new TextRun(part));
+          }
+        }
+        return runs;
+      }
+
+      const headingMap: Record<string, typeof HeadingLevel[keyof typeof HeadingLevel]> = {
+        h1: HeadingLevel.HEADING_1,
+        h2: HeadingLevel.HEADING_2,
+        h3: HeadingLevel.HEADING_3,
+        h4: HeadingLevel.HEADING_4,
+        h5: HeadingLevel.HEADING_5,
+        h6: HeadingLevel.HEADING_6,
+      };
+
+      if (block.type in headingMap) {
+        children.push(
+          new Paragraph({
+            heading: headingMap[block.type],
+            children: parseTextRuns(text),
+          })
+        );
+      } else if (block.type === 'ul') {
+        children.push(
+          new Paragraph({
+            bullet: { level: 0 },
+            children: parseTextRuns(text),
+          })
+        );
+      } else if (block.type === 'ol') {
+        children.push(
+          new Paragraph({
+            numbering: { reference: 'default-numbering', level: 0 },
+            children: parseTextRuns(text),
+          })
+        );
+      } else if (block.type === 'quote') {
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text, italics: true, color: '555555' })],
+            indent: { left: 720 },
+          })
+        );
+      } else if (block.type === 'code') {
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text, font: 'Courier New', size: 18 })],
+            shading: { fill: 'F5F5F5' } as never,
+          })
+        );
+      } else if (block.type === 'hr') {
+        children.push(new Paragraph({ text: '──────────────', alignment: AlignmentType.CENTER }));
+      } else if (text) {
+        children.push(new Paragraph({ children: parseTextRuns(text) }));
+      }
+    }
+
+    const doc = new Document({
+      sections: [{ properties: {}, children }],
+    });
+
+    const buffer = await Packer.toBlob(doc);
+    downloadBlob(buffer, `${sanitizeFilename(title)}.docx`);
+  } catch (e) {
+    console.warn('docx package not available, falling back to HTML export:', e);
+    // Fallback: export as HTML (downloadable)
+    const html = blocksToHtml(blocks, title);
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    downloadBlob(blob, `${sanitizeFilename(title)}.html`);
+    alert('DOCX export requires the "docx" npm package. Exported as HTML instead.\nRun: npm install docx');
+  }
+}
+</file>
+
+<file path="lib/markdownTransform.ts">
+/**
+ * markdownTransform.ts
+ *
+ * Utilities for:
+ * 1. Detecting markdown syntax at the start of a line and returning the
+ *    block type + cleaned text.
+ * 2. Parsing inline markdown (bold, italic, strikethrough, code, links).
+ * 3. Parsing full markdown documents into a block array for initial load.
+ */
+
+export type BlockType =
+  | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
+  | 'ul' | 'ol' | 'quote' | 'code' | 'hr'
+  | 'table' | 'p';
+
+export interface BlockDetection {
+  type: BlockType;
+  /** The text content with the markdown prefix stripped */
+  text: string;
+  /** Original raw line (for undo purposes) */
+  raw: string;
+  /** Optional language metadata for code blocks */
+  language?: string;
+}
+
+/**
+ * Detects block-level markdown at the beginning of a line.
+ * Returns the block type and stripped text if a pattern matches,
+ * or null if no block-level pattern is found.
+ */
+export function detectBlockType(rawLine: string): BlockDetection | null {
+  // Headings
+  const headingMatch = rawLine.match(/^(#{1,6})\s+(.*)/);
+  if (headingMatch) {
+    const level = headingMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
+    return {
+      type: `h${level}` as BlockType,
+      text: headingMatch[2],
+      raw: rawLine,
+    };
+  }
+
+  // Horizontal rule
+  if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(rawLine)) {
+    return { type: 'hr', text: '', raw: rawLine };
+  }
+
+  // Unordered list: -, *, +
+  const ulMatch = rawLine.match(/^[-*+]\s+(.*)/);
+  if (ulMatch) {
+    return { type: 'ul', text: ulMatch[1], raw: rawLine };
+  }
+
+  // Ordered list: 1. 2. etc.
+  const olMatch = rawLine.match(/^\d+\.\s+(.*)/);
+  if (olMatch) {
+    return { type: 'ol', text: olMatch[1], raw: rawLine };
+  }
+
+  // Blockquote
+  const quoteMatch = rawLine.match(/^>\s?(.*)/);
+  if (quoteMatch) {
+    return { type: 'quote', text: quoteMatch[1], raw: rawLine };
+  }
+
+  // Code block fence
+  if (rawLine.startsWith('```')) {
+     const language = rawLine.slice(3).trim();
+     return { type: 'code', text: '', raw: rawLine, language: language || undefined };
+  }
+
+  return null;
+}
+
+/**
+ * Determines what prefix to add back when reverting a block type.
+ */
+export function blockTypeToPrefixedText(type: BlockType, text: string): string {
+  switch (type) {
+    case 'h1': return `# ${text}`;
+    case 'h2': return `## ${text}`;
+    case 'h3': return `### ${text}`;
+    case 'h4': return `#### ${text}`;
+    case 'h5': return `##### ${text}`;
+    case 'h6': return `###### ${text}`;
+    case 'ul': return `- ${text}`;
+    case 'ol': return `1. ${text}`;
+    case 'quote': return `> ${text}`;
+    case 'code': return `\`\`\`${text}`;
+    case 'hr': return '---';
+    default: return text;
+  }
+}
+
+/**
+ * Parses inline markdown within a string and returns HTML.
+ * Handles: bold, italic, strikethrough, inline code, links, images.
+ */
+export function parseInlineMarkdown(text: string): string {
+  // Escape HTML first (except we'll handle special chars carefully)
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Images: ![alt](url)
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />');
+
+  // Links: [text](url)
+  html = html.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+
+  // Bold+italic: ***text*** or ___text___
+  html = html.replace(/(\*{3}|_{3})(.+?)\1/g, '<strong><em>$2</em></strong>');
+
+  // Bold: **text** or __text__
+  html = html.replace(/(\*{2}|_{2})(.+?)\1/g, '<strong>$2</strong>');
+
+  // Italic: *text* or _text_
+  html = html.replace(/(\*|_)(.+?)\1/g, '<em>$2</em>');
+
+  // Strikethrough: ~~text~~
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+  // Inline code: `code`
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  return html;
+}
+
+/**
+ * Converts a full markdown string into an array of block objects.
+ * Used when loading a document from storage to populate the editor.
+ */
+export interface ParsedBlock {
+  id: string;
+  type: BlockType;
+  /** Plain text content (no markdown prefix) */
+  text: string;
+  /** Raw markdown line */
+  raw: string;
+  /** Optional language metadata for code blocks */
+  language?: string;
+}
+
+let blockCounter = 0;
+function nextBlockId() {
+  return `b_${Date.now()}_${blockCounter++}`;
+}
+
+export function parseMarkdownToBlocks(markdown: string): ParsedBlock[] {
+  if (!markdown.trim()) {
+    return [{ id: nextBlockId(), type: 'h1', text: '', raw: '' }];
+  }
+
+  const lines = markdown.split('\n');
+  const blocks: ParsedBlock[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Code block fence — consume until closing fence
+    if (line.startsWith('```')) {
+      const lang = line.slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing ```
+      blocks.push({
+        id: nextBlockId(),
+        type: 'code',
+        text: codeLines.join('\n'),
+        raw: `\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\``,
+        language: lang || undefined,
+      });
+      continue;
+    }
+
+    // Table: detect | at start
+    if (line.startsWith('|')) {
+      const tableLines: string[] = [line];
+      i++;
+      while (i < lines.length && lines[i].startsWith('|')) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      blocks.push({
+        id: nextBlockId(),
+        type: 'table',
+        text: tableLines.join('\n'),
+        raw: tableLines.join('\n'),
+      });
+      continue;
+    }
+
+    // Empty line → skip
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+
+    const detected = detectBlockType(line);
+    if (detected) {
+      blocks.push({
+        id: nextBlockId(),
+        type: detected.type,
+        text: detected.text,
+        raw: detected.raw,
+        language: detected.language,
+      });
+    } else {
+      blocks.push({
+        id: nextBlockId(),
+        type: 'p',
+        text: line,
+        raw: line,
+      });
+    }
+    i++;
+  }
+
+  if (blocks.length === 0) {
+    blocks.push({ id: nextBlockId(), type: 'h1', text: '', raw: '' });
+  }
+
+  return blocks;
+}
+
+/**
+ * Converts an array of ParsedBlocks back to a markdown string.
+ */
+export function blocksToMarkdown(blocks: ParsedBlock[]): string {
+  return blocks
+    .map((block) => {
+      switch (block.type) {
+        case 'h1': return `# ${block.text}`;
+        case 'h2': return `## ${block.text}`;
+        case 'h3': return `### ${block.text}`;
+        case 'h4': return `#### ${block.text}`;
+        case 'h5': return `##### ${block.text}`;
+        case 'h6': return `###### ${block.text}`;
+        case 'ul': return `- ${block.text}`;
+        case 'ol': return `1. ${block.text}`;
+        case 'quote': return `> ${block.text}`;
+        case 'code': return `\`\`\`\n${block.text}\n\`\`\``;
+        case 'hr': return '---';
+        case 'table': return block.text;
+        default: return block.text;
+      }
+    })
+    .join('\n\n');
+}
+
+/**
+ * Parses a table markdown string into an HTML table.
+ */
+export function parseTableMarkdown(tableRaw: string): string {
+  const rows = tableRaw
+    .split('\n')
+    .map((line) => line.split('|').map((c) => c.trim()).filter((_, i, arr) => i !== 0 && i !== arr.length - 1));
+
+  if (rows.length < 2) return tableRaw;
+
+  const [header, , ...body] = rows;
+  const isAlignRow = (row: string[]) => row.every((c) => /^[-:]+$/.test(c));
+  
+  const headerHtml = header
+    .map((cell) => `<th>${parseInlineMarkdown(cell)}</th>`)
+    .join('');
+  
+  const bodyHtml = body
+    .filter((row) => !isAlignRow(row))
+    .map((row) => `<tr>${row.map((cell) => `<td>${parseInlineMarkdown(cell)}</td>`).join('')}</tr>`)
+    .join('');
+
+  return `<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+}
+</file>
+
+<file path="lib/serviceWorkerRegistration.ts">
+/**
+ * serviceWorkerRegistration.ts
+ *
+ * Registers the custom service worker at /sw.js.
+ * Call this once from a client component after mount.
+ */
+
+export async function registerServiceWorker(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  if (!('serviceWorker' in navigator)) {
+    console.warn('Service workers are not supported in this browser.');
+    return;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', {
+      scope: '/',
+    });
+
+    registration.addEventListener('updatefound', () => {
+      const newWorker = registration.installing;
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          // A new version is available
+          console.log('New version of Notes is available. Refresh to update.');
+        }
+      });
+    });
+
+    console.log('Service worker registered:', registration.scope);
+  } catch (err) {
+    console.error('Service worker registration failed:', err);
+  }
+}
+</file>
+
+<file path="public/icon.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MyDoc icon">
+  <rect width="512" height="512" rx="120" fill="#141413" />
+  <rect x="112" y="96" width="288" height="320" rx="24" fill="#1f1e1b" stroke="#2b2a27" stroke-width="8" />
+  <rect x="160" y="160" width="192" height="14" rx="7" fill="#60a5fa" />
+  <rect x="160" y="198" width="156" height="12" rx="6" fill="#8a8880" />
+  <rect x="160" y="230" width="178" height="12" rx="6" fill="#8a8880" />
+  <rect x="160" y="262" width="132" height="12" rx="6" fill="#8a8880" />
+  <rect x="160" y="306" width="120" height="14" rx="7" fill="#60a5fa" />
+</svg>
+</file>
+
+<file path="public/manifest.json">
+{
+  "name": "MyDoc",
+  "short_name": "MyDoc",
+  "description": "A distraction-free markdown notes editor",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#141413",
+  "theme_color": "#141413",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
+</file>
+
+<file path="public/sw.js">
+/**
+ * sw.js — Notes Editor Service Worker
+ *
+ * Strategy:
+ *   - App shell (HTML, JS, CSS, fonts) → Cache First with network fallback
+ *   - API requests → Network First with cache fallback
+ *   - Images → Cache First with stale-while-revalidate
+ *
+ * The app stores all user data in localStorage, so offline = full functionality.
+ */
+
+const CACHE_NAME = 'notes-v2';
+const RUNTIME_CACHE = 'notes-runtime-v2';
+const FONT_CACHE = 'notes-fonts-v2';
+
+// Resources to pre-cache on install (app shell)
+const APP_SHELL = [
+  '/',
+  '/manifest.json',
+];
+
+// ─── Install ─────────────────────────────────────────────────────────────────
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      // Cache what we can — Next.js chunks will be cached on first fetch
+      try {
+        await cache.addAll(APP_SHELL);
+      } catch (e) {
+        console.warn('[SW] Pre-cache failed for some resources:', e);
+      }
+      // Take over immediately without waiting for old SW to die
+      await self.skipWaiting();
+    })()
+  );
+});
+
+// ─── Activate ─────────────────────────────────────────────────────────────────
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      // Clean up old caches
+      const cacheNames = await caches.keys();
+      await Promise.all(
+        cacheNames
+          .filter((name) => name !== CACHE_NAME && name !== RUNTIME_CACHE && name !== FONT_CACHE)
+          .map((name) => caches.delete(name))
+      );
+      // Claim all open clients
+      await self.clients.claim();
+    })()
+  );
+});
+
+// ─── Fetch ────────────────────────────────────────────────────────────────────
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  const url = new URL(request.url);
+
+  // Ignore non-GET requests
+  if (request.method !== 'GET') return;
+
+  // Ignore chrome-extension and other non-http schemes
+  if (!url.protocol.startsWith('http')) return;
+
+  // ── Fonts (Google Fonts CDN) ── cache-first, long TTL
+  if (
+    url.hostname === 'fonts.googleapis.com' ||
+    url.hostname === 'fonts.gstatic.com'
+  ) {
+    event.respondWith(cacheFirst(request, FONT_CACHE));
+    return;
+  }
+
+  // ── Next.js static assets (_next/static)
+  // Let the browser handle Next.js chunk caching to avoid stale app-shell mismatches.
+  if (url.pathname.startsWith('/_next/static/')) {
+    return;
+  }
+
+  // ── Next.js image optimization ── network first
+  if (url.pathname.startsWith('/_next/image')) {
+    event.respondWith(networkFirst(request, RUNTIME_CACHE));
+    return;
+  }
+
+  // ── App navigation (HTML pages) ── network first with cache fallback
+  if (request.headers.get('accept')?.includes('text/html')) {
+    event.respondWith(networkFirst(request, CACHE_NAME));
+    return;
+  }
+
+  // ── Everything else ── stale-while-revalidate
+  event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));
+});
+
+// ─── Cache Strategies ─────────────────────────────────────────────────────────
+
+/**
+ * Cache First: serve from cache; on miss, fetch from network and cache the result.
+ */
+async function cacheFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    return new Response('Offline — resource not cached', { status: 503 });
+  }
+}
+
+/**
+ * Network First: try network; on failure, serve from cache.
+ */
+async function networkFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    // Fallback for navigation — serve the cached root
+    if (request.headers.get('accept')?.includes('text/html')) {
+      const rootCached = await cache.match('/');
+      if (rootCached) return rootCached;
+    }
+    return new Response('You are offline and this resource is not cached.', { status: 503 });
+  }
+}
+
+/**
+ * Stale While Revalidate: serve cached immediately; update cache in background.
+ */
+async function staleWhileRevalidate(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+
+  const fetchPromise = fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  return cached || (await fetchPromise) || new Response('Offline', { status: 503 });
+}
+
+// ─── Background Sync (optional future) ───────────────────────────────────────
+// The app is fully localStorage-based, so no sync is needed.
+// This stub is here for future cloud backup features.
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-notes') {
+    // Future: sync notes to a backend
+    console.log('[SW] Background sync triggered (no-op for now)');
+  }
+});
+</file>
+
+<file path="app/globals.css">
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;1,9..144,300;1,9..144,400&family=Inter:wght@300;400;500;600&display=swap');
+@import 'highlight.js/styles/github-dark.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────
+   CSS CUSTOM PROPERTIES — THEME TOKENS
+───────────────────────────────────────── */
+
+:root {
+  /* Base UI (always Manrope) */
+  --font-ui: 'Manrope', sans-serif;
+  --font-editor-fraunces: 'Fraunces', serif;
+  --font-editor-inter: 'Inter', sans-serif;
+
+  /* Spacing / layout */
+  --content-width-narrow: 560px;
+  --content-width-medium: 720px;
+  --content-width-wide: 960px;
+}
+
+/* ── LIGHT THEME ── */
+[data-theme="light"] {
+  --bg-app: #f7f6f3;
+  --bg-editor: #f0efe9;
+  --bg-sidebar: #f0efe9;
+  --bg-toolbar: #f0efe9;
+  --bg-modal: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-topbar: #f0efe9;
+
+  --text-primary: #1a1916;
+  --text-secondary: #6b6a65;
+  --text-muted: #a09e98;
+  --text-placeholder: #c4c2bb;
+  --text-inverse: #ffffff;
+
+  --border-default: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.15);
+
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+
+  --shadow-toolbar: 0 4px 24px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.15);
+  --shadow-sidebar: 4px 0 24px rgba(0, 0, 0, 0.06);
+}
+
+/* ── DARK THEME ── */
+[data-theme="dark"] {
+  --bg-app: #141413;
+  --bg-editor: #111110;
+  --bg-sidebar: #111110;
+  --bg-toolbar: #111110;
+  --bg-modal: #1e1d1b;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.1);
+  --bg-topbar: #111110;
+
+  --text-primary: #e8e6e1;
+  --text-secondary: #8a8880;
+  --text-muted: #5a5854;
+  --text-placeholder: #3d3c39;
+  --text-inverse: #141413;
+
+  --border-default: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  --accent: #60a5fa;
+  --accent-hover: #93c5fd;
+
+  --shadow-toolbar: 0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.5);
+  --shadow-sidebar: 4px 0 24px rgba(0, 0, 0, 0.3);
+}
+
+/* ── SEPIA THEME ── */
+[data-theme="sepia"] {
+  --bg-app: #f5f0e8;
+  --bg-editor: #ede8dc;
+  --bg-sidebar: #ede8dc;
+  --bg-toolbar: #ede8dc;
+  --bg-modal: #faf7f2;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-topbar: #ede8dc;
+
+  --text-primary: #2c2416;
+  --text-secondary: #7a6b52;
+  --text-muted: #a8957a;
+  --text-placeholder: #c9b99a;
+  --text-inverse: #faf7f2;
+
+  --border-default: rgba(0, 0, 0, 0.07);
+  --border-strong: rgba(0, 0, 0, 0.14);
+
+  --accent: #8b5e3c;
+  --accent-hover: #6d4a2e;
+
+  --shadow-toolbar: 0 4px 24px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.12);
+  --shadow-sidebar: 4px 0 24px rgba(0, 0, 0, 0.05);
+}
+
+/* ─────────────────────────────────────────
+   BASE RESETS
+───────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font-ui);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  transition: background 0.2s ease, color 0.2s ease;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─────────────────────────────────────────
+   EDITOR CONTENT STYLES
+───────────────────────────────────────── */
+
+.editor-content {
+  font-family: var(--font-editor);
+  color: var(--text-primary);
+  font-size: 1.04rem;
+  line-height: 1.72;
+  outline: none;
+  min-height: 100%;
+}
+
+/* Block-level elements */
+.editor-content h1 {
+  font-size: 2em;
+  font-weight: 700;
+  line-height: 1.15;
+  margin-bottom: 0.45em;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.editor-content h2 {
+  font-size: 1.58em;
+  font-weight: 600;
+  line-height: 1.24;
+  margin-top: 1.35em;
+  margin-bottom: 0.34em;
+  letter-spacing: -0.015em;
+}
+
+.editor-content h3 {
+  font-size: 1.22em;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.1em;
+  margin-bottom: 0.3em;
+}
+
+.editor-content h4 {
+  font-size: 1em;
+  font-weight: 600;
+  margin-top: 0.9em;
+  margin-bottom: 0.22em;
+}
+
+.editor-content h5 {
+  font-size: 0.9em;
+  font-weight: 600;
+  margin-top: 0.85em;
+  margin-bottom: 0.2em;
+  color: var(--text-secondary);
+}
+
+.editor-content h6 {
+  font-size: 0.83em;
+  font-weight: 600;
+  margin-top: 0.85em;
+  margin-bottom: 0.2em;
+  color: var(--text-muted);
+}
+
+.editor-content p {
+  margin-bottom: 0.75em;
+}
+
+.editor-content blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 0.45em 1.05em;
+  margin: 0.95em 0;
+  color: var(--text-secondary);
+  font-style: italic;
+  background: var(--bg-hover);
+  border-radius: 0 6px 6px 0;
+}
+
+.editor-content ul {
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+  list-style-type: disc;
+}
+
+.editor-content ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+  list-style-type: decimal;
+}
+
+.editor-content li {
+  margin-bottom: 0.16em;
+}
+
+.editor-content code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.875em;
+  background: var(--bg-active);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+.editor-content pre {
+  background: var(--bg-active);
+  border-radius: 8px;
+  padding: 1.25em;
+  overflow-x: auto;
+  margin: 1.25em 0;
+}
+
+.editor-content pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.875em;
+  color: var(--text-primary);
+}
+
+.editor-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25em 0;
+  font-size: 0.9em;
+}
+
+.editor-content table th {
+  background: var(--bg-hover);
+  font-weight: 600;
+  padding: 0.6em 1em;
+  text-align: left;
+  border: 1px solid var(--border-strong);
+}
+
+.editor-content table td {
+  padding: 0.5em 1em;
+  border: 1px solid var(--border-default);
+}
+
+.editor-content table tr:nth-child(even) {
+  background: var(--bg-hover);
+}
+
+.editor-content img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 1em 0;
+  display: block;
+}
+
+.editor-content a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.editor-content hr {
+  border: none;
+  border-top: 1px solid var(--border-default);
+  margin: 2em 0;
+}
+
+.editor-content strong { font-weight: 700; }
+.editor-content em { font-style: italic; }
+.editor-content s, .editor-content del { text-decoration: line-through; color: var(--text-muted); }
+
+/* Task list */
+.editor-content input[type="checkbox"] {
+  margin-right: 0.5em;
+  accent-color: var(--accent);
+}
+
+/* ─────────────────────────────────────────
+   EDITOR BLOCK (contenteditable div approach)
+───────────────────────────────────────── */
+
+.editor-block {
+  outline: none;
+  min-height: 1.72em;
+  position: relative;
+  margin-bottom: 0.9em;
+}
+
+.editor-block.is-h1 { font-size: 2.18em; font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; }
+.editor-block.is-h2 { font-size: 1.72em; font-weight: 600; line-height: 1.24; letter-spacing: -0.015em; }
+.editor-block.is-h3 { font-size: 1.33em; font-weight: 600; line-height: 1.3; }
+.editor-block.is-h4 { font-size: 1.08em; font-weight: 600; }
+.editor-block.is-h5 { font-size: 0.98em; font-weight: 600; color: var(--text-secondary); }
+.editor-block.is-h6 { font-size: 0.9em; font-weight: 600; color: var(--text-muted); }
+.editor-block.is-quote {
+  border-left: 3px solid var(--accent);
+  padding: 0.45em 1.05em;
+  font-style: italic;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: 0 6px 6px 0;
+}
+.editor-block.is-code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.92em;
+  background: var(--bg-active);
+  border-radius: 6px;
+  padding: 0.9em 1em;
+  white-space: pre;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.editor-block.is-ul { padding-left: 1.5em; list-style-type: disc; display: list-item; }
+.editor-block.is-ol { padding-left: 1.5em; list-style-type: decimal; display: list-item; }
+
+.editor-code-wrap {
+  margin-bottom: 0.7em;
+}
+
+.editor-code-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.35em;
+}
+
+.editor-code-language-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-editor);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.editor-code-language-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.editor-code-language-select {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  font-weight: 500;
+  padding: 0;
+  outline: none;
+  cursor: pointer;
+}
+
+.editor-code-language-select:focus {
+  outline: none;
+}
+
+.editor-block.is-code code {
+  display: block;
+  min-width: max-content;
+  white-space: pre;
+}
+
+.hljs {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-title,
+.hljs-section,
+.hljs-doctag,
+.hljs-name,
+.hljs-strong {
+  color: #f97316;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-addition {
+  color: #10b981;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-variable,
+.hljs-quote,
+.hljs-code {
+  color: #22c55e;
+}
+
+.hljs-comment,
+.hljs-meta,
+.hljs-deletion {
+  color: var(--text-muted);
+}
+
+/* Empty placeholder */
+.editor-block[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-placeholder);
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+}
+
+.editor-block.is-h1[data-placeholder]:empty::before {
+  font-size: inherit;
+}
+
+/* ─────────────────────────────────────────
+   SCROLLBARS
+───────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ─────────────────────────────────────────
+   TRANSITIONS
+───────────────────────────────────────── */
+
+.sidebar-enter { transform: translateX(-100%); }
+.sidebar-enter-active { transform: translateX(0); transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
+.sidebar-exit { transform: translateX(0); }
+.sidebar-exit-active { transform: translateX(-100%); transition: transform 0.18s ease-in; }
+
+/* Modal backdrop */
+.modal-backdrop {
+  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.4);
+}
+[data-theme="dark"] .modal-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* ─────────────────────────────────────────
+   SELECTION
+───────────────────────────────────────── */
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* ─────────────────────────────────────────
+   UTILITY CLASSES
+───────────────────────────────────────── */
+
+.glass {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  font-family: var(--font-ui);
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.icon-btn.active {
+  background: var(--bg-active);
+  color: var(--accent);
+}
+</file>
+
+<file path="app/layout.tsx">
+import type { Metadata, Viewport } from 'next';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'Notes',
+  description: 'A distraction-free markdown notes editor that works offline.',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Notes',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f7f6f3' },
+    { media: '(prefers-color-scheme: dark)', color: '#141413' },
+  ],
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Preconnect for Google Fonts */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;1,9..144,300;1,9..144,400&family=Inter:wght@300;400;500;600&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body suppressHydrationWarning>{children}</body>
+    </html>
+  );
+}
+</file>
+
+<file path="app/page.tsx">
+'use client';
+
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useDocuments } from '@/hooks/useDocuments';
+import { usePreferences } from '@/hooks/usePreferences';
+import { Editor } from '@/components/Editor/Editor';
+import { TopBar } from '@/components/TopBar';
+import { Sidebar } from '@/components/Sidebar';
+import { ExportModal } from '@/components/modals/ExportModal';
+import { PreferencesModal } from '@/components/modals/PreferencesModal';
+import { registerServiceWorker } from '@/lib/serviceWorkerRegistration';
+
+function useDebouncedCallback<T extends (...args: never[]) => void>(
+  fn: T,
+  delay: number
+): T {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return useCallback(
+    ((...args: Parameters<T>) => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => fn(...args), delay);
+    }) as T,
+    [fn, delay]
+  );
+}
+
+export default function NotesApp() {
+  const {
+    documents,
+    activeDocument,
+    activeDocId,
+    isLoaded,
+    updateDocument,
+    createDocument,
+    openDocument,
+    deleteDocument,
+  } = useDocuments();
+
+  const { preferences, isLoaded: prefsLoaded, updatePreferences } = usePreferences();
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
+  const debouncedSave = useDebouncedCallback(
+    (id: string, content: string) => {
+      updateDocument(id, { content });
+    },
+    400
+  );
+
+  const handleContentChange = useCallback(
+    (markdown: string) => {
+      if (!activeDocId) return;
+      debouncedSave(activeDocId, markdown);
+    },
+    [activeDocId, debouncedSave]
+  );
+
+  const handleTitleChange = useCallback(
+    (title: string) => {
+      if (!activeDocId) return;
+      updateDocument(activeDocId, { title });
+    },
+    [activeDocId, updateDocument]
+  );
+
+  const handleExportDoc = useCallback(() => {
+    setExportOpen(true);
+  }, []);
+
+  const handleSidebarExport = useCallback(
+    (id: string) => {
+      openDocument(id);
+      setExportOpen(true);
+    },
+    [openDocument]
+  );
+
+  if (!isLoaded || !prefsLoaded) {
+    return (
+      <div
+        style={{
+          height: '100dvh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg-app)',
+        }}
+      >
+        <div
+          style={{
+            width: '20px',
+            height: '20px',
+            borderRadius: '50%',
+            border: '2px solid var(--border-default)',
+            borderTopColor: 'var(--accent)',
+            animation: 'spin 0.7s linear infinite',
+          }}
+        />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        height: '100dvh',
+        display: 'flex',
+        flexDirection: 'row',
+        overflow: 'hidden',
+        background: 'var(--bg-app)',
+      }}
+    >
+      <Sidebar
+        isOpen={sidebarOpen}
+        documents={documents}
+        activeDocId={activeDocId}
+        onClose={() => setSidebarOpen(false)}
+        onOpen={openDocument}
+        onCreate={() => {
+          createDocument();
+        }}
+        onDelete={deleteDocument}
+        onExport={handleSidebarExport}
+      />
+
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <TopBar
+          title={activeDocument?.title ?? 'Untitled'}
+          onTitleChange={handleTitleChange}
+          onMenuToggle={() => setSidebarOpen((v) => !v)}
+          onExport={handleExportDoc}
+          onPreferences={() => setPrefsOpen(true)}
+        />
+
+        {activeDocument && (
+          <Editor
+            key={activeDocument.id}
+            docId={activeDocument.id}
+            content={activeDocument.content}
+            contentWidth={
+              preferences.width === 'narrow'
+                ? '560px'
+                : preferences.width === 'wide'
+                ? '960px'
+                : '720px'
+            }
+            fontCss={preferences.font === 'inter' ? "'Inter', sans-serif" : "'Fraunces', serif"}
+            sidebarOffset={sidebarOpen ? 300 : 0}
+            onChange={handleContentChange}
+          />
+        )}
+      </div>
+
+      <ExportModal
+        isOpen={exportOpen}
+        document={activeDocument}
+        onClose={() => setExportOpen(false)}
+      />
+
+      <PreferencesModal
+        isOpen={prefsOpen}
+        preferences={preferences}
+        onClose={() => setPrefsOpen(false)}
+        onUpdate={updatePreferences}
+      />
+    </div>
+  );
+}
+</file>
+
+<file path="biome.json">
+{
+  "$schema": "https://biomejs.dev/schemas/2.2.0/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": ["**", "!node_modules", "!.next", "!dist", "!build"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noUnknownAtRules": "off"
+      }
+    },
+    "domains": {
+      "next": "recommended",
+      "react": "recommended"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
+}
+</file>
+
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  // Allows the service worker to intercept all routes
+  headers: async () => [
+    {
+      source: '/sw.js',
+      headers: [
+        { key: 'Service-Worker-Allowed', value: '/' },
+        { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+      ],
+    },
+  ],
+  // Enable React strict mode for better dev experience
+  reactStrictMode: true,
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "mydoc",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "biome check",
+    "format": "biome format --write"
+  },
+  "dependencies": {
+    "docx": "^9.6.1",
+    "dompurify": "^3.3.3",
+    "highlight.js": "^11.11.1",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.577.0",
+    "markdown-it": "^14.1.1",
+    "next": "16.2.0",
+    "pdfkit": "^0.18.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+</file>
+
+<file path="postcss.config.mjs">
+const config = {
+  plugins: {
+    "@tailwindcss/postcss": {},
+  },
+};
+
+export default config;
+</file>
+
+<file path="public/file.svg">
+<svg fill="none" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 13.5V5.41a1 1 0 0 0-.3-.7L9.8.29A1 1 0 0 0 9.08 0H1.5v13.5A2.5 2.5 0 0 0 4 16h8a2.5 2.5 0 0 0 2.5-2.5m-1.5 0v-7H8v-5H3v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1M9.5 5V2.12L12.38 5zM5.13 5h-.62v1.25h2.12V5zm-.62 3h7.12v1.25H4.5zm.62 3h-.62v1.25h7.12V11z" clip-rule="evenodd" fill="#666" fill-rule="evenodd"/></svg>
+</file>
+
+<file path="public/globe.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g clip-path="url(#a)"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.27 14.1a6.5 6.5 0 0 0 3.67-3.45q-1.24.21-2.7.34-.31 1.83-.97 3.1M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.48-1.52a7 7 0 0 1-.96 0H7.5a4 4 0 0 1-.84-1.32q-.38-.89-.63-2.08a40 40 0 0 0 3.92 0q-.25 1.2-.63 2.08a4 4 0 0 1-.84 1.31zm2.94-4.76q1.66-.15 2.95-.43a7 7 0 0 0 0-2.58q-1.3-.27-2.95-.43a18 18 0 0 1 0 3.44m-1.27-3.54a17 17 0 0 1 0 3.64 39 39 0 0 1-4.3 0 17 17 0 0 1 0-3.64 39 39 0 0 1 4.3 0m1.1-1.17q1.45.13 2.69.34a6.5 6.5 0 0 0-3.67-3.44q.65 1.26.98 3.1M8.48 1.5l.01.02q.41.37.84 1.31.38.89.63 2.08a40 40 0 0 0-3.92 0q.25-1.2.63-2.08a4 4 0 0 1 .85-1.32 7 7 0 0 1 .96 0m-2.75.4a6.5 6.5 0 0 0-3.67 3.44 29 29 0 0 1 2.7-.34q.31-1.83.97-3.1M4.58 6.28q-1.66.16-2.95.43a7 7 0 0 0 0 2.58q1.3.27 2.95.43a18 18 0 0 1 0-3.44m.17 4.71q-1.45-.12-2.69-.34a6.5 6.5 0 0 0 3.67 3.44q-.65-1.27-.98-3.1" fill="#666"/></g><defs><clipPath id="a"><path fill="#fff" d="M0 0h16v16H0z"/></clipPath></defs></svg>
+</file>
+
+<file path="public/next.svg">
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 394 80"><path fill="#000" d="M262 0h68.5v12.7h-27.2v66.6h-13.6V12.7H262V0ZM149 0v12.7H94v20.4h44.3v12.6H94v21h55v12.6H80.5V0h68.7zm34.3 0h-17.8l63.8 79.4h17.9l-32-39.7 32-39.6h-17.9l-23 28.6-23-28.6zm18.3 56.7-9-11-27.1 33.7h17.8l18.3-22.7z"/><path fill="#000" d="M81 79.3 17 0H0v79.3h13.6V17l50.2 62.3H81Zm252.6-.4c-1 0-1.8-.4-2.5-1s-1.1-1.6-1.1-2.6.3-1.8 1-2.5 1.6-1 2.6-1 1.8.3 2.5 1a3.4 3.4 0 0 1 .6 4.3 3.7 3.7 0 0 1-3 1.8zm23.2-33.5h6v23.3c0 2.1-.4 4-1.3 5.5a9.1 9.1 0 0 1-3.8 3.5c-1.6.8-3.5 1.3-5.7 1.3-2 0-3.7-.4-5.3-1s-2.8-1.8-3.7-3.2c-.9-1.3-1.4-3-1.4-5h6c.1.8.3 1.6.7 2.2s1 1.2 1.6 1.5c.7.4 1.5.5 2.4.5 1 0 1.8-.2 2.4-.6a4 4 0 0 0 1.6-1.8c.3-.8.5-1.8.5-3V45.5zm30.9 9.1a4.4 4.4 0 0 0-2-3.3 7.5 7.5 0 0 0-4.3-1.1c-1.3 0-2.4.2-3.3.5-.9.4-1.6 1-2 1.6a3.5 3.5 0 0 0-.3 4c.3.5.7.9 1.3 1.2l1.8 1 2 .5 3.2.8c1.3.3 2.5.7 3.7 1.2a13 13 0 0 1 3.2 1.8 8.1 8.1 0 0 1 3 6.5c0 2-.5 3.7-1.5 5.1a10 10 0 0 1-4.4 3.5c-1.8.8-4.1 1.2-6.8 1.2-2.6 0-4.9-.4-6.8-1.2-2-.8-3.4-2-4.5-3.5a10 10 0 0 1-1.7-5.6h6a5 5 0 0 0 3.5 4.6c1 .4 2.2.6 3.4.6 1.3 0 2.5-.2 3.5-.6 1-.4 1.8-1 2.4-1.7a4 4 0 0 0 .8-2.4c0-.9-.2-1.6-.7-2.2a11 11 0 0 0-2.1-1.4l-3.2-1-3.8-1c-2.8-.7-5-1.7-6.6-3.2a7.2 7.2 0 0 1-2.4-5.7 8 8 0 0 1 1.7-5 10 10 0 0 1 4.3-3.5c2-.8 4-1.2 6.4-1.2 2.3 0 4.4.4 6.2 1.2 1.8.8 3.2 2 4.3 3.4 1 1.4 1.5 3 1.5 5h-5.8z"/></svg>
+</file>
+
+<file path="public/vercel.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1155 1000"><path d="m577.3 0 577.4 1000H0z" fill="#fff"/></svg>
+</file>
+
+<file path="public/window.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 2.5h13v10a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1zM0 1h16v11.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 0 12.5zm3.75 4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5M7 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0m1.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5" fill="#666"/></svg>
+</file>
+
+<file path="README.md">
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+
+## Getting Started
+
+First, run the development server:
+
+```bash
+npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Learn More
+
+To learn more about Next.js, take a look at the following resources:
+
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+
+## Deploy on Vercel
+
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}
+</file>
+
+</files>

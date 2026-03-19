@@ -1,7 +1,18 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Allows the service worker to intercept all routes
+  headers: async () => [
+    {
+      source: '/sw.js',
+      headers: [
+        { key: 'Service-Worker-Allowed', value: '/' },
+        { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+      ],
+    },
+  ],
+  // Enable React strict mode for better dev experience
+  reactStrictMode: true,
 };
 
 export default nextConfig;

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MyDoc icon">
+  <rect width="512" height="512" rx="120" fill="#141413" />
+  <rect x="112" y="96" width="288" height="320" rx="24" fill="#1f1e1b" stroke="#2b2a27" stroke-width="8" />
+  <rect x="160" y="160" width="192" height="14" rx="7" fill="#60a5fa" />
+  <rect x="160" y="198" width="156" height="12" rx="6" fill="#8a8880" />
+  <rect x="160" y="230" width="178" height="12" rx="6" fill="#8a8880" />
+  <rect x="160" y="262" width="132" height="12" rx="6" fill="#8a8880" />
+  <rect x="160" y="306" width="120" height="14" rx="7" fill="#60a5fa" />
+</svg>

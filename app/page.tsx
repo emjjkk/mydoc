@@ -1,65 +1,194 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useDocuments } from '@/hooks/useDocuments';
+import { usePreferences } from '@/hooks/usePreferences';
+import { Editor } from '@/components/Editor/Editor';
+import { TopBar } from '@/components/TopBar';
+import { Sidebar } from '@/components/Sidebar';
+import { ExportModal } from '@/components/modals/ExportModal';
+import { PreferencesModal } from '@/components/modals/PreferencesModal';
+import { registerServiceWorker } from '@/lib/serviceWorkerRegistration';
+
+function useDebouncedCallback<T extends (...args: never[]) => void>(
+  fn: T,
+  delay: number
+): T {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return useCallback(
+    ((...args: Parameters<T>) => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => fn(...args), delay);
+    }) as T,
+    [fn, delay]
+  );
+}
+
+export default function NotesApp() {
+  const {
+    documents,
+    activeDocument,
+    activeDocId,
+    isLoaded,
+    updateDocument,
+    createDocument,
+    openDocument,
+    deleteDocument,
+  } = useDocuments();
+
+  const {
+    preferences,
+    isLoaded: prefsLoaded,
+    updatePreferences,
+    contentWidthPx,
+    fontCss,
+  } = usePreferences();
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    const update = () => setIsMobileViewport(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  const debouncedSave = useDebouncedCallback(
+    (id: string, content: string) => {
+      updateDocument(id, { content });
+    },
+    400
+  );
+
+  const handleContentChange = useCallback(
+    (markdown: string) => {
+      if (!activeDocId) return;
+      debouncedSave(activeDocId, markdown);
+    },
+    [activeDocId, debouncedSave]
+  );
+
+  const handleTitleChange = useCallback(
+    (title: string) => {
+      if (!activeDocId) return;
+      updateDocument(activeDocId, { title });
+    },
+    [activeDocId, updateDocument]
+  );
+
+  const handleExportDoc = useCallback(() => {
+    setExportOpen(true);
+  }, []);
+
+  const handleSidebarExport = useCallback(
+    (id: string) => {
+      openDocument(id);
+      setExportOpen(true);
+    },
+    [openDocument]
+  );
+
+  if (!isLoaded || !prefsLoaded) {
+    return (
+      <div
+        style={{
+          height: '100dvh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg-app)',
+        }}
+      >
+        <div
+          style={{
+            width: '20px',
+            height: '20px',
+            borderRadius: '50%',
+            border: '2px solid var(--border-default)',
+            borderTopColor: 'var(--accent)',
+            animation: 'spin 0.7s linear infinite',
+          }}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        height: '100dvh',
+        display: 'flex',
+        flexDirection: 'row',
+        overflow: 'hidden',
+        background: 'var(--bg-app)',
+      }}
+    >
+      <Sidebar
+        isOpen={sidebarOpen}
+        isMobile={isMobileViewport}
+        documents={documents}
+        activeDocId={activeDocId}
+        onClose={() => setSidebarOpen(false)}
+        onOpen={openDocument}
+        onCreate={() => {
+          createDocument();
+        }}
+        onDelete={deleteDocument}
+        onExport={handleSidebarExport}
+      />
+
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <TopBar
+          title={activeDocument?.title ?? 'Untitled'}
+          onTitleChange={handleTitleChange}
+          onMenuToggle={() => setSidebarOpen((v) => !v)}
+          onExport={handleExportDoc}
+          onPreferences={() => setPrefsOpen(true)}
+        />
+
+        {activeDocument && (
+          <Editor
+            key={activeDocument.id}
+            docId={activeDocument.id}
+            content={activeDocument.content}
+            contentWidth={contentWidthPx}
+            fontCss={fontCss}
+            sidebarOffset={!isMobileViewport && sidebarOpen ? 300 : 0}
+            onChange={handleContentChange}
+          />
+        )}
+      </div>
+
+      <ExportModal
+        isOpen={exportOpen}
+        document={activeDocument}
+        onClose={() => setExportOpen(false)}
+      />
+
+      <PreferencesModal
+        isOpen={prefsOpen}
+        preferences={preferences}
+        onClose={() => setPrefsOpen(false)}
+        onUpdate={updatePreferences}
+      />
     </div>
   );
 }
