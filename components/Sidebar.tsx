@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Document } from '@/hooks/useDocuments';
 
 interface SidebarProps {
@@ -95,6 +95,17 @@ export function Sidebar({
   onDelete,
   onExport,
 }: SidebarProps) {
+  const docMeta = useMemo(
+    () =>
+      documents.map((doc) => ({
+        ...doc,
+        wordCount: getWordCount(doc.content),
+        preview: getPreviewText(doc.content) || 'No content yet.',
+        createdLabel: formatCreatedDate(doc.createdAt),
+      })),
+    [documents]
+  );
+
   // Close on Escape
   useEffect(() => {
     if (!isOpen) return;
@@ -240,10 +251,8 @@ export function Sidebar({
               No documents yet
             </p>
           ) : (
-            documents.map((doc) => {
+            docMeta.map((doc) => {
               const isActive = doc.id === activeDocId;
-              const wordCount = getWordCount(doc.content);
-              const preview = getPreviewText(doc.content) || 'No content yet.';
               return (
                 <div
                   key={doc.id}
@@ -295,7 +304,7 @@ export function Sidebar({
                         fontFamily: 'var(--font-ui)',
                         marginBottom: '6px',
                       }}>
-                        {wordCount} {wordCount === 1 ? 'word' : 'words'} · Created {formatCreatedDate(doc.createdAt)}
+                        {doc.wordCount} {doc.wordCount === 1 ? 'word' : 'words'} · Created {doc.createdLabel}
                       </p>
                       <p
                         style={{
@@ -310,7 +319,7 @@ export function Sidebar({
                           textOverflow: 'ellipsis',
                         }}
                       >
-                        {preview}
+                        {doc.preview}
                       </p>
                     </div>
                   </button>

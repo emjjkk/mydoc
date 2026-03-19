@@ -166,7 +166,6 @@ export default function NotesApp() {
 
         {activeDocument && (
           <Editor
-            key={activeDocument.id}
             docId={activeDocument.id}
             content={activeDocument.content}
             contentWidth={contentWidthPx}

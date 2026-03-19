@@ -47,7 +47,7 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
   useEffect(() => {
     if (prevDocIdRef.current !== docId) {
       prevDocIdRef.current = docId;
-      loadContent(content);
+      loadContent(docId, content);
     }
   }, [docId, content, loadContent]);
 

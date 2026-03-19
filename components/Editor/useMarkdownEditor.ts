@@ -55,8 +55,24 @@ export function useMarkdownEditor(
   const redoStackRef = useRef<ParsedBlock[][]>([]);
   const isApplyingHistoryRef = useRef(false);
   const savedSelectionRef = useRef<Range | null>(null);
+  const parseCacheRef = useRef<Map<string, { content: string; blocks: ParsedBlock[] }>>(new Map());
 
   const cloneBlocks = useCallback((items: ParsedBlock[]) => items.map((b) => ({ ...b })), []);
+
+  const parseWithCache = useCallback(
+    (docId: string, content: string): ParsedBlock[] => {
+      const cached = parseCacheRef.current.get(docId);
+      if (cached && cached.content === content) {
+        return cloneBlocks(cached.blocks);
+      }
+
+      const parsed = parseMarkdownToBlocks(content);
+      const normalized = parsed.length > 0 ? parsed : [createBlock('h1')];
+      parseCacheRef.current.set(docId, { content, blocks: cloneBlocks(normalized) });
+      return normalized;
+    },
+    [cloneBlocks]
+  );
 
   const syncToMarkdown = useCallback(
     (updated: ParsedBlock[]) => {
@@ -604,13 +620,13 @@ export function useMarkdownEditor(
   }, [cloneBlocks, syncToMarkdown]);
 
   // ── Load new content ──────────────────────────────────────────────────────
-  const loadContent = useCallback((content: string) => {
-    const parsed = parseMarkdownToBlocks(content);
-    setBlocks(parsed.length > 0 ? parsed : [createBlock('h1')]);
+  const loadContent = useCallback((docId: string, content: string) => {
+    const parsed = parseWithCache(docId, content);
+    setBlocks(parsed);
     setFocusedBlockId(null);
     undoStackRef.current = [];
     redoStackRef.current = [];
-  }, []);
+  }, [parseWithCache]);
 
   return {
     blocks,
