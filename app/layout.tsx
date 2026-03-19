@@ -2,13 +2,13 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Notes',
+  title: 'MyDoc',
   description: 'A distraction-free markdown notes editor that works offline.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'Notes',
+    title: 'MyDoc',
   },
 };
 
