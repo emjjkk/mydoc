@@ -6,8 +6,10 @@ interface TopBarProps {
   title: string;
   onTitleChange: (title: string) => void;
   onMenuToggle: () => void;
+  isSidebarOpen?: boolean;
   onExport: () => void;
   onPreferences: () => void;
+  savingStatus?: 'idle' | 'saving' | 'saved';
 }
 
 function IconMenu() {
@@ -16,6 +18,14 @@ function IconMenu() {
       <line x1="3" y1="6" x2="21" y2="6" />
       <line x1="3" y1="12" x2="21" y2="12" />
       <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
+
+function IconChevronLeft() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6" />
     </svg>
   );
 }
@@ -39,7 +49,15 @@ function IconSettings() {
   );
 }
 
-export function TopBar({ title, onTitleChange, onMenuToggle, onExport, onPreferences }: TopBarProps) {
+export function TopBar({
+  title,
+  onTitleChange,
+  onMenuToggle,
+  isSidebarOpen = false,
+  onExport,
+  onPreferences,
+  savingStatus = 'idle',
+}: TopBarProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -91,11 +109,11 @@ export function TopBar({ title, onTitleChange, onMenuToggle, onExport, onPrefere
         minHeight: '50px',
       }}
     >
-      {/* Left: menu toggle */}
-      <div style={{ justifySelf: 'start' }}>
+      {/* Left: menu toggle and saving indicator */}
+      <div style={{ justifySelf: 'start', display: 'flex', alignItems: 'center', gap: '12px' }}>
         <button
           onClick={onMenuToggle}
-          title="Open documents"
+          title={isSidebarOpen ? 'Close documents' : 'Open documents'}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -119,8 +137,24 @@ export function TopBar({ title, onTitleChange, onMenuToggle, onExport, onPrefere
             (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
           }}
         >
-          <IconMenu />
+          {isSidebarOpen ? <IconChevronLeft /> : <IconMenu />}
         </button>
+        
+        {/* Saving indicator */}
+        {savingStatus !== 'idle' && (
+          <div
+            style={{
+              fontSize: '12px',
+              fontFamily: 'var(--font-ui)',
+              color: savingStatus === 'saving' ? 'var(--text-secondary)' : 'var(--accent)',
+              fontWeight: '500',
+              transition: 'color 0.3s ease',
+              minWidth: '50px',
+            }}
+          >
+            {savingStatus === 'saving' ? 'saving...' : 'saved'}
+          </div>
+        )}
       </div>
 
       {/* Center: editable title */}

@@ -58,7 +58,13 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
         const lastBlock = blocks[blocks.length - 1];
         if (lastBlock) {
           const el = document.querySelector(`[data-block-id="${lastBlock.id}"]`) as HTMLElement;
-          el?.focus();
+          if (!el) return;
+          const rect = el.getBoundingClientRect();
+          const clickY = e.clientY;
+          // Only jump to end when clicking below content, not in side margins.
+          if (clickY >= rect.bottom) {
+            el.focus();
+          }
         }
       }
     },

@@ -10,7 +10,7 @@ import React, {
   ClipboardEvent,
 } from 'react';
 import hljs from 'highlight.js/lib/common';
-import { ParsedBlock, parseInlineMarkdown, parseTableMarkdown } from '@/lib/markdownTransform';
+import { ParsedBlock, parseInlineMarkdown, parseTableMarkdown, detectBlockType } from '@/lib/markdownTransform';
 
 interface EditorBlockProps {
   block: ParsedBlock;
@@ -154,6 +154,27 @@ export const EditorBlock = React.memo(function EditorBlock({
     [block.id, registerRef]
   );
 
+  const focusEditableBlock = useCallback(() => {
+    const el = elRef.current;
+    if (!el) return;
+    onFocus(block.id);
+    el.focus();
+  }, [block.id, onFocus]);
+
+  const handleWrapperPress = useCallback(
+    (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement;
+      // Let native interactions work for controls and direct editable taps.
+      if (target.closest('button, input, select, textarea, a, [contenteditable="true"]')) {
+        return;
+      }
+      // Keep focus stable across block navigation on mobile.
+      e.preventDefault();
+      focusEditableBlock();
+    },
+    [focusEditableBlock]
+  );
+
   // Always-rendered HTML (used as initial innerHTML and for unfocused sync)
   const renderedHtml = useMemo(
     () => parseInlineMarkdown(block.text),
@@ -165,12 +186,11 @@ export const EditorBlock = React.memo(function EditorBlock({
     const el = elRef.current;
     if (!el || block.type === 'code' || block.type === 'table') return;
     if (!isFocused) {
-      const newHtml = parseInlineMarkdown(block.text);
-      if (el.innerHTML !== newHtml) {
-        el.innerHTML = newHtml;
+      if (el.innerHTML !== renderedHtml) {
+        el.innerHTML = renderedHtml;
       }
     }
-  }, [block.text, block.type, isFocused]);
+  }, [renderedHtml, block.type, isFocused]);
 
   // When block gains focus: sync HTML once, position cursor at end
   const prevFocusedRef = useRef(isFocused);
@@ -182,9 +202,8 @@ export const EditorBlock = React.memo(function EditorBlock({
     prevFocusedRef.current = isFocused;
     const el = elRef.current;
     if (!el || block.type === 'code' || block.type === 'table') return;
-    const expectedHtml = parseInlineMarkdown(block.text);
-    if (el.innerHTML !== expectedHtml) {
-      el.innerHTML = expectedHtml;
+    if (el.innerHTML !== renderedHtml) {
+      el.innerHTML = renderedHtml;
       try {
         const range = document.createRange();
         const sel = window.getSelection();
@@ -194,7 +213,7 @@ export const EditorBlock = React.memo(function EditorBlock({
         sel?.addRange(range);
       } catch { /* ignore */ }
     }
-  }, [isFocused, block.id, block.text, block.type]);
+  }, [isFocused, block.id, renderedHtml, block.type]);
 
   // ── Table block ──────────────────────────────────────────────────────────
   if (block.type === 'table') {
@@ -340,8 +359,22 @@ export const EditorBlock = React.memo(function EditorBlock({
         document.execCommand('insertText', false, '  ');
         return;
       }
+
+      // ── Space key: immediately detect markdown patterns (e.g., "# " for H1) ───
+      if (e.key === ' ' && block.type === 'p') {
+        // Defer to next tick to read the updated text with space included
+        requestAnimationFrame(() => {
+          const text = htmlToMarkdown(el.innerHTML);
+          // Check if this matches a block pattern
+          const detected = detectBlockType(text);
+          if (detected && detected.type !== 'p') {
+            // Apply the block type change immediately
+            onTextChange(block.id, text);
+          }
+        });
+      }
     },
-    [block.id, block.type, onEnter, onBackspaceEmpty, onArrow, onClearDocument, onUndo, onRedo]
+    [block.id, block.type, onEnter, onBackspaceEmpty, onArrow, onClearDocument, onUndo, onRedo, onTextChange]
   );
 
   // ── Input: read innerHTML → convert to markdown ───────────────────────────
@@ -508,7 +541,8 @@ export const EditorBlock = React.memo(function EditorBlock({
   if (block.type === 'ul') {
     return (
       <div className={`editor-block-wrapper${isFocused ? ' is-focused' : ''}${isHovered ? ' is-hovered' : ''}`}
-        onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
+        onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}
+        onMouseDown={handleWrapperPress} onTouchStart={handleWrapperPress}>
         <BlockGutter {...gutterProps} />
         <ul className="editor-list-wrap">{React.createElement('li', contentProps as never)}</ul>
       </div>
@@ -517,7 +551,8 @@ export const EditorBlock = React.memo(function EditorBlock({
   if (block.type === 'ol') {
     return (
       <div className={`editor-block-wrapper${isFocused ? ' is-focused' : ''}${isHovered ? ' is-hovered' : ''}`}
-        onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
+        onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}
+        onMouseDown={handleWrapperPress} onTouchStart={handleWrapperPress}>
         <BlockGutter {...gutterProps} />
         <ol className="editor-list-wrap">{React.createElement('li', contentProps as never)}</ol>
       </div>
@@ -527,7 +562,8 @@ export const EditorBlock = React.memo(function EditorBlock({
   // ── Default (p, h1-h6, quote) ─────────────────────────────────────────────
   return (
     <div className={`editor-block-wrapper${isFocused ? ' is-focused' : ''}${isHovered ? ' is-hovered' : ''}`}
-      onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
+      onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}
+      onMouseDown={handleWrapperPress} onTouchStart={handleWrapperPress}>
       <BlockGutter {...gutterProps} />
       {React.createElement(tag, contentProps as never)}
     </div>

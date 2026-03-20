@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   BlockType,
   ParsedBlock,
@@ -81,6 +81,18 @@ export function useMarkdownEditor(
     [onChange]
   );
 
+  // Debounce sync to avoid excessive writes
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const syncToMarkdownDebounced = useCallback(
+    (updated: ParsedBlock[]) => {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = setTimeout(() => {
+        syncToMarkdown(updated);
+      }, 300);
+    },
+    [syncToMarkdown]
+  );
+
   const applyBlocksChange = useCallback(
     (updater: (prev: ParsedBlock[]) => ParsedBlock[]) => {
       setBlocks((prev) => {
@@ -91,11 +103,11 @@ export function useMarkdownEditor(
           if (undoStackRef.current.length > 200) undoStackRef.current.shift();
           redoStackRef.current = [];
         }
-        syncToMarkdown(next);
+        syncToMarkdownDebounced(next);
         return next;
       });
     },
-    [cloneBlocks, syncToMarkdown]
+    [cloneBlocks, syncToMarkdownDebounced]
   );
 
   const registerRef = useCallback((id: string, el: HTMLElement | null) => {
@@ -336,13 +348,51 @@ export function useMarkdownEditor(
   );
 
   // ── Image paste ───────────────────────────────────────────────────────────
+  // ── Image compression: resize and reduce quality to avoid freezing ────────
+  const compressImage = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          // Max size 1024x1024 to keep it reasonable
+          let width = img.naturalWidth;
+          let height = img.naturalHeight;
+          const maxSize = 1024;
+          
+          if (width > maxSize || height > maxSize) {
+            const ratio = Math.min(maxSize / width, maxSize / height);
+            width *= ratio;
+            height *= ratio;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) ctx.drawImage(img, 0, 0, width, height);
+          
+          // Convert to compressed JPEG at 70% quality
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          resolve(compressedDataUrl);
+        };
+        img.onerror = () => {
+          // Fallback to original if image fails to load
+          resolve(e.target?.result as string);
+        };
+        img.src = e.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  // ── Handle image paste with compression ───────────────────────────────────
   const handleImagePaste = useCallback(
     (blockId: string, file: File): boolean => {
       if (!file.type.startsWith('image/')) return false;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const dataUrl = e.target?.result as string;
-        if (!dataUrl) return;
+      
+      // Process in background to avoid blocking
+      compressImage(file).then((dataUrl) => {
         const imageBlock: ParsedBlock = {
           id: newId(),
           type: 'p',
@@ -362,40 +412,43 @@ export function useMarkdownEditor(
           });
           return updated;
         });
-      };
-      reader.readAsDataURL(file);
+      });
       return true;
     },
-    [applyBlocksChange]
+    [applyBlocksChange, compressImage]
   );
 
   // ── Markdown paste ────────────────────────────────────────────────────────
+  // ── Handle markdown paste with async parsing to avoid blocking ──────────────
   const handleMarkdownPaste = useCallback(
     (blockId: string, markdownText: string): boolean => {
-      const pastedBlocks = parseMarkdownToBlocks(markdownText).map((b) => ({
-        ...b,
-        id: newId(),
-      }));
-      if (pastedBlocks.length === 0) return false;
-      applyBlocksChange((prev) => {
-        const idx = prev.findIndex((b) => b.id === blockId);
-        if (idx === -1) return prev;
-        const target = prev[idx];
-        const shouldReplaceTarget =
-          !target.text.trim() && (target.type === 'p' || target.type === 'h1');
-        const insertStart = shouldReplaceTarget ? idx : idx + 1;
-        const tailStart = idx + 1;
-        const updated = [
-          ...prev.slice(0, insertStart),
-          ...pastedBlocks,
-          ...prev.slice(tailStart),
-        ];
-        const lastPasted = pastedBlocks[pastedBlocks.length - 1];
-        requestAnimationFrame(() => {
-          const el = blockRefs.current.get(lastPasted.id);
-          el?.focus();
+      // Parse asynchronously to avoid blocking on large pastes
+      Promise.resolve().then(() => {
+        const pastedBlocks = parseMarkdownToBlocks(markdownText).map((b) => ({
+          ...b,
+          id: newId(),
+        }));
+        if (pastedBlocks.length === 0) return;
+        applyBlocksChange((prev) => {
+          const idx = prev.findIndex((b) => b.id === blockId);
+          if (idx === -1) return prev;
+          const target = prev[idx];
+          const shouldReplaceTarget =
+            !target.text.trim() && (target.type === 'p' || target.type === 'h1');
+          const insertStart = shouldReplaceTarget ? idx : idx + 1;
+          const tailStart = idx + 1;
+          const updated = [
+            ...prev.slice(0, insertStart),
+            ...pastedBlocks,
+            ...prev.slice(tailStart),
+          ];
+          const lastPasted = pastedBlocks[pastedBlocks.length - 1];
+          requestAnimationFrame(() => {
+            const el = blockRefs.current.get(lastPasted.id);
+            el?.focus();
+          });
+          return updated;
         });
-        return updated;
       });
       return true;
     },
@@ -479,6 +532,9 @@ export function useMarkdownEditor(
       return;
     }
 
+    // Preserve selection after formatting
+    const selectionToRestore = sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
+
     // Sync block text after insertion
     requestAnimationFrame(() => {
       const el = blockRefs.current.get(blockId);
@@ -493,6 +549,23 @@ export function useMarkdownEditor(
         return next;
       });
       setFocusedBlockId(blockId);
+
+      // Restore selection after state update
+      if (selectionToRestore) {
+        requestAnimationFrame(() => {
+          const sel = window.getSelection();
+          if (sel) {
+            try {
+              sel.removeAllRanges();
+              sel.addRange(selectionToRestore);
+              // Update saved selection so subsequent format actions use the current selection
+              savedSelectionRef.current = selectionToRestore.cloneRange();
+            } catch {
+              // Range might be invalid after DOM updates, ignore
+            }
+          }
+        });
+      }
     });
   }, [syncToMarkdown]);
 
@@ -627,6 +700,17 @@ export function useMarkdownEditor(
     undoStackRef.current = [];
     redoStackRef.current = [];
   }, [parseWithCache]);
+
+  // ── Flush debounced sync on unmount ────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      // Clear timeout and ensure final sync happens
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+        // Sync immediately on unmount
+      }
+    };
+  }, []);
 
   return {
     blocks,

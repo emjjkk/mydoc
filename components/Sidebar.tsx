@@ -124,7 +124,7 @@ export function Sidebar({
         minHeight: 0,
         position: isMobile ? 'fixed' : 'relative',
         inset: isMobile ? '0' : undefined,
-        zIndex: isMobile ? 60 : 'auto',
+        zIndex: isMobile ? 90 : 'auto',
         pointerEvents: isMobile && !isOpen ? 'none' : 'auto',
       }}
     >
@@ -378,7 +378,7 @@ export function Sidebar({
               href="https://emjjkk.tech"
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: '#ffffff', textDecoration: 'underline', textUnderlineOffset: '2px' }}
+              style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: '2px' }}
             >
               @emjjkk
             </a>
@@ -389,7 +389,7 @@ export function Sidebar({
               href="https://github.com/emjjkk/mydoc"
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: '#ffffff', textDecoration: 'underline', textUnderlineOffset: '2px' }}
+              style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: '2px' }}
             >
               emjjkk/mydoc
             </a>

@@ -48,6 +48,8 @@ export default function NotesApp() {
   const [exportOpen, setExportOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [savingStatus, setSavingStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const savingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     registerServiceWorker();
@@ -63,7 +65,14 @@ export default function NotesApp() {
 
   const debouncedSave = useDebouncedCallback(
     (id: string, content: string) => {
+      setSavingStatus('saving');
       updateDocument(id, { content });
+      // Mark as saved after save completes
+      setSavingStatus('saved');
+      if (savingTimeoutRef.current) clearTimeout(savingTimeoutRef.current);
+      savingTimeoutRef.current = setTimeout(() => {
+        setSavingStatus('idle');
+      }, 1500);
     },
     400
   );
@@ -71,6 +80,7 @@ export default function NotesApp() {
   const handleContentChange = useCallback(
     (markdown: string) => {
       if (!activeDocId) return;
+      setSavingStatus('saving');
       debouncedSave(activeDocId, markdown);
     },
     [activeDocId, debouncedSave]
@@ -160,8 +170,10 @@ export default function NotesApp() {
           title={activeDocument?.title ?? 'Untitled'}
           onTitleChange={handleTitleChange}
           onMenuToggle={() => setSidebarOpen((v) => !v)}
+          isSidebarOpen={sidebarOpen}
           onExport={handleExportDoc}
           onPreferences={() => setPrefsOpen(true)}
+          savingStatus={savingStatus}
         />
 
         {activeDocument && (
