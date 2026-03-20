@@ -1,4 +1,4 @@
-<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/36254050-8a3b-462c-894c-f18c4ecc8e50" />
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/28d7dfa2-cad2-4bf4-8c23-2ea1728e32ec" />
 
 # MyDoc - Offline markdown-based editor in the browser
 
