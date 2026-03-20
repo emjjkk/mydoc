@@ -5,10 +5,12 @@ import { useDocuments } from '@/hooks/useDocuments';
 import { usePreferences } from '@/hooks/usePreferences';
 import { Editor } from '@/components/Editor/Editor';
 import { TopBar } from '@/components/TopBar';
-import { Sidebar } from '@/components/Sidebar';
 import { ExportModal } from '@/components/modals/ExportModal';
+import { NewFolderModal } from '@/components/modals/NewFolderModal';
 import { PreferencesModal } from '@/components/modals/PreferencesModal';
+import { InstallPwaButton } from '@/components/InstallPwaButton';
 import { registerServiceWorker } from '@/lib/serviceWorkerRegistration';
+import { Sidebar } from '../components/Sidebar';
 
 function useDebouncedCallback<T extends (...args: never[]) => void>(
   fn: T,
@@ -27,6 +29,7 @@ function useDebouncedCallback<T extends (...args: never[]) => void>(
 export default function NotesApp() {
   const {
     documents,
+    folders,
     activeDocument,
     activeDocId,
     isLoaded,
@@ -34,6 +37,9 @@ export default function NotesApp() {
     createDocument,
     openDocument,
     deleteDocument,
+    createFolder,
+    renameFolder,
+    deleteFolder,
   } = useDocuments();
 
   const {
@@ -46,6 +52,7 @@ export default function NotesApp() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [savingStatus, setSavingStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -146,11 +153,31 @@ export default function NotesApp() {
         isOpen={sidebarOpen}
         isMobile={isMobileViewport}
         documents={documents}
+        folders={folders}
         activeDocId={activeDocId}
         onClose={() => setSidebarOpen(false)}
         onOpen={openDocument}
-        onCreate={() => {
-          createDocument();
+        onCreate={(folderId: string | null | undefined) => {
+          createDocument(folderId ?? null);
+        }}
+        onCreateFolder={() => {
+          setNewFolderOpen(true);
+        }}
+        onRenameFolder={(id: string) => {
+          const folder = folders.find((item) => item.id === id);
+          if (!folder) return;
+          const name = window.prompt('Rename folder', folder.name);
+          if (!name) return;
+          renameFolder(id, name);
+        }}
+        onDeleteFolder={(id: string) => {
+          const folder = folders.find((item) => item.id === id);
+          if (!folder) return;
+          const confirmed = window.confirm(
+            `Delete folder "${folder.name}"? Documents in it will move to No Folder.`
+          );
+          if (!confirmed) return;
+          deleteFolder(id);
         }}
         onDelete={deleteDocument}
         onExport={handleSidebarExport}
@@ -194,12 +221,23 @@ export default function NotesApp() {
         onClose={() => setExportOpen(false)}
       />
 
+      <NewFolderModal
+        isOpen={newFolderOpen}
+        onClose={() => setNewFolderOpen(false)}
+        onSubmit={(name) => {
+          createFolder(name);
+          setNewFolderOpen(false);
+        }}
+      />
+
       <PreferencesModal
         isOpen={prefsOpen}
         preferences={preferences}
         onClose={() => setPrefsOpen(false)}
         onUpdate={updatePreferences}
       />
+
+      <InstallPwaButton />
     </div>
   );
 }
