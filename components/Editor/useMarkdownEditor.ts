@@ -41,6 +41,32 @@ function htmlToMarkdown(html: string): string {
     .replace(/&quot;/g, '"');
 }
 
+function tableDomToMarkdown(container: HTMLElement): string | null {
+  const table = container.querySelector('table.editor-table');
+  if (!table) return null;
+
+  const headers = Array.from(
+    table.querySelectorAll('thead th.editor-table-th:not(.table-add-col-th) .table-cell-input')
+  ).map((cell) => htmlToMarkdown((cell as HTMLElement).innerHTML).trim());
+
+  if (headers.length === 0) return null;
+
+  const bodyRows = Array.from(table.querySelectorAll('tbody tr')).map((row) =>
+    Array.from(
+      row.querySelectorAll('td.editor-table-td:not(.table-row-actions) .table-cell-input')
+    ).map((cell) => htmlToMarkdown((cell as HTMLElement).innerHTML).trim())
+  );
+
+  const rows = bodyRows.length > 0 ? bodyRows : [headers.map(() => '')];
+  const separator = headers.map(() => '--------');
+
+  return [
+    `| ${headers.join(' | ')} |`,
+    `| ${separator.join(' | ')} |`,
+    ...rows.map((row) => `| ${row.join(' | ')} |`),
+  ].join('\n');
+}
+
 export function useMarkdownEditor(
   initialContent: string,
   onChange: (markdown: string) => void
@@ -148,6 +174,42 @@ export function useMarkdownEditor(
     sel.addRange(savedSelectionRef.current);
   }, []);
 
+  const placeCaretAfterRender = useCallback((blockId: string, offset: number) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = blockRefs.current.get(blockId);
+        if (!el) return;
+        const sel = window.getSelection();
+        if (!sel) return;
+
+        el.focus();
+        const range = document.createRange();
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let currentOffset = 0;
+        let node = walker.nextNode() as Text | null;
+
+        while (node) {
+          const nodeText = node.nodeValue ?? '';
+          const nextOffset = currentOffset + nodeText.length;
+          if (offset <= nextOffset) {
+            range.setStart(node, Math.max(0, offset - currentOffset));
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            return;
+          }
+          currentOffset = nextOffset;
+          node = walker.nextNode() as Text | null;
+        }
+
+        range.selectNodeContents(el);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    });
+  }, []);
+
   const getSelectedBlockId = useCallback((): string | null => {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
@@ -220,24 +282,11 @@ export function useMarkdownEditor(
           newBlock,
           ...prev.slice(idx + 1),
         ];
-        requestAnimationFrame(() => {
-          const el = blockRefs.current.get(newBlock.id);
-          if (el) {
-            el.focus();
-            try {
-              const range = document.createRange();
-              const sel = window.getSelection();
-              range.setStart(el, 0);
-              range.collapse(true);
-              sel?.removeAllRanges();
-              sel?.addRange(range);
-            } catch { /* ignore */ }
-          }
-        });
+        placeCaretAfterRender(newBlock.id, 0);
         return updated;
       });
     },
-    [applyBlocksChange]
+    [applyBlocksChange, placeCaretAfterRender]
   );
 
   // ── Text change: detect markdown prefix transforms ───────────────────────
@@ -314,6 +363,67 @@ export function useMarkdownEditor(
       });
     },
     [applyBlocksChange]
+  );
+
+  const setCaretOffset = useCallback((el: HTMLElement, offset: number) => {
+    const sel = window.getSelection();
+    if (!sel) return;
+
+    const range = document.createRange();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let currentOffset = 0;
+    let node = walker.nextNode() as Text | null;
+
+    while (node) {
+      const nodeText = node.nodeValue ?? '';
+      const nextOffset = currentOffset + nodeText.length;
+      if (offset <= nextOffset) {
+        range.setStart(node, Math.max(0, offset - currentOffset));
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return;
+      }
+      currentOffset = nextOffset;
+      node = walker.nextNode() as Text | null;
+    }
+
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }, []);
+
+  const mergeBlockWithPrevious = useCallback(
+    (blockId: string) => {
+      applyBlocksChange((prev) => {
+        const idx = prev.findIndex((b) => b.id === blockId);
+        if (idx <= 0) return prev;
+
+        const previous = prev[idx - 1];
+        const current = prev[idx];
+        const previousEl = blockRefs.current.get(previous.id);
+        const caretOffset = previousEl?.textContent?.length ?? previous.text.length;
+        const mergedText = `${previous.text}${current.text}`;
+        const mergedPrevious: ParsedBlock = {
+          ...previous,
+          type: previous.type === 'hr' ? 'p' : previous.type,
+          text: mergedText,
+          raw: mergedText,
+        };
+
+        const updated = [
+          ...prev.slice(0, idx - 1),
+          mergedPrevious,
+          ...prev.slice(idx + 1),
+        ];
+
+        placeCaretAfterRender(mergedPrevious.id, caretOffset);
+
+        return updated;
+      });
+    },
+    [applyBlocksChange, placeCaretAfterRender]
   );
 
   // ── Arrow navigation ─────────────────────────────────────────────────────
@@ -492,8 +602,8 @@ export function useMarkdownEditor(
     if (!sel || sel.rangeCount === 0) return;
 
     const range = sel.getRangeAt(0);
-    const selectedText = range.toString().trim();
-    if (!selectedText.length) return;
+    const selectedText = range.toString();
+    if (!selectedText.trim().length) return;
 
     const startEl =
       (range.startContainer.nodeType === Node.TEXT_NODE
@@ -513,20 +623,23 @@ export function useMarkdownEditor(
     const blockId = blockEl.getAttribute('data-block-id');
     if (!blockId) return;
 
-    if (format === 'bold') document.execCommand('bold');
-    else if (format === 'italic') document.execCommand('italic');
-    else if (format === 'strikethrough') document.execCommand('strikeThrough');
+    const safe = selectedText
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    if (format === 'bold') {
+      document.execCommand('insertHTML', false, `<strong>${safe}</strong>`);
+    }
+    else if (format === 'italic') {
+      document.execCommand('insertHTML', false, `<em>${safe}</em>`);
+    }
+    else if (format === 'strikethrough') {
+      document.execCommand('insertHTML', false, `<del>${safe}</del>`);
+    }
     else if (format === 'code') {
-      const safe = selectedText
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
       document.execCommand('insertHTML', false, `<code>${safe}</code>`);
     } else if (format === 'link') {
-      const safe = selectedText
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
       document.execCommand('insertHTML', false, `<a href="https://">${safe}</a>`);
     } else {
       return;
@@ -539,7 +652,7 @@ export function useMarkdownEditor(
     requestAnimationFrame(() => {
       const el = blockRefs.current.get(blockId);
       if (!el) return;
-      const fullText = htmlToMarkdown(el.innerHTML);
+      const fullText = tableDomToMarkdown(el) ?? htmlToMarkdown(el.innerHTML);
       // Sync state
       setBlocks((prev) => {
         const next = prev.map((b) =>
@@ -722,6 +835,7 @@ export function useMarkdownEditor(
     handleEnter,
     handleTextChange,
     handleBackspaceOnEmpty,
+    mergeBlockWithPrevious,
     handleArrowNavigation,
     handleImagePaste,
     handleMarkdownPaste,

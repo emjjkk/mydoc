@@ -8,6 +8,7 @@ interface FloatingToolbarProps {
   blocks: ParsedBlock[];
   sidebarOffset: number;
   onAction: (action: string, value?: string) => void;
+  onToolbarInteract?: () => void;
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -207,7 +208,7 @@ function TBtn({ title, action, IconComponent, isActive, onAction, isMobile }: TB
 
 // ── Main toolbar ──────────────────────────────────────────────────────────────
 
-export function FloatingToolbar({ focusedBlockId, blocks, sidebarOffset, onAction }: FloatingToolbarProps) {
+export function FloatingToolbar({ focusedBlockId, blocks, sidebarOffset, onAction, onToolbarInteract }: FloatingToolbarProps) {
   const [headingOpen, setHeadingOpen] = useState(false);
   const [blockTypeOpen, setBlockTypeOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -269,8 +270,14 @@ export function FloatingToolbar({ focusedBlockId, blocks, sidebarOffset, onActio
   return (
     <div
       className="floating-toolbar glass"
-      onMouseDown={(e) => e.preventDefault()}
-      onTouchStart={(e) => e.preventDefault()}
+      onMouseDown={(e) => {
+        onToolbarInteract?.();
+        e.preventDefault();
+      }}
+      onTouchStart={(e) => {
+        onToolbarInteract?.();
+        e.preventDefault();
+      }}
       style={{
         position: 'fixed',
         left: `calc(50% + ${sidebarOffset / 2}px)`,

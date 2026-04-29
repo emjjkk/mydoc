@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { GrDocumentImage } from 'react-icons/gr';
 import { Document, DocumentFolder } from '@/hooks/useDocuments';
 
 interface SidebarProps {
@@ -13,11 +14,24 @@ interface SidebarProps {
   onOpen: (id: string) => void;
   onCreate: (folderId?: string | null) => void;
   onCreateFolder: () => void;
-  onRenameFolder: (id: string) => void;
-  onDeleteFolder: (id: string) => void;
+  onEditFolder: (id: string) => void;
+  onReorderFolders: (folderId: string, beforeFolderId: string | null) => void;
+  onReorderDocuments: (docId: string, targetFolderId: string | null, beforeDocId?: string | null) => void;
   onDelete: (id: string) => void;
   onExport: (id: string) => void;
 }
+
+type DragItem = {
+  kind: 'folder' | 'document';
+  id: string;
+  folderId?: string | null;
+};
+
+type DropTarget = {
+  kind: 'folders' | 'documents';
+  folderId: string | null;
+  beforeId: string | null;
+};
 
 function IconPlus() {
   return (
@@ -66,23 +80,6 @@ function IconChevronLeft() {
   );
 }
 
-function IconChevronRight() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  );
-}
-
-function IconDoc() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </svg>
-  );
-}
-
 function IconFolder() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -121,14 +118,157 @@ function IconEdit() {
   );
 }
 
-function getPreviewText(content: string): string {
-  return content
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[#>*_`~\-|]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function getPreviewLines(content: string): string[] {
+  const rawLines = content.split(/\r?\n/);
+  const lines: string[] = [];
+
+  for (const rawLine of rawLines) {
+    const cleaned = rawLine
+      .replace(/```.*$/g, '')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[#>*_`~\-|]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!cleaned) continue;
+    lines.push(cleaned);
+    if (lines.length === 3) break;
+  }
+
+  return lines.length > 0 ? lines : ['No content yet.'];
+}
+
+function getFileSize(content: string): string {
+  const bytes = new TextEncoder().encode(content).length;
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp;
+  const minutes = Math.max(1, Math.round(diff / 60000));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function getCardSurface(active: boolean, accent?: string): React.CSSProperties {
+  return {
+    borderRadius: '6px',
+    border: 'none',
+    background: active
+      ? accent
+        ? `color-mix(in srgb, ${accent} 12%, var(--foreground) 88%)`
+        : 'var(--bg-active)'
+      : 'color-mix(in srgb, var(--bg-sidebar) 82%, gray 4%)',
+    boxShadow: 'none',
+  };
+}
+
+function DocumentCard({
+  doc,
+  isActive,
+  isDragging,
+  onOpen,
+  onDelete,
+  onExport,
+  onDragStart,
+  onDragEnd,
+}: {
+  doc: Document;
+  isActive: boolean;
+  isDragging: boolean;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onExport: (id: string) => void;
+  onDragStart: (event: React.DragEvent<HTMLDivElement>, doc: Document) => void;
+  onDragEnd: () => void;
+}) {
+  return (
+    <div
+      draggable
+      onDragStart={(event) => onDragStart(event, doc)}
+      onDragEnd={onDragEnd}
+      style={{
+        ...getCardSurface(isActive),
+        padding: '10px 11px',
+        cursor: 'grab',
+        opacity: isDragging ? 0.55 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0 }}>
+        <button
+          onClick={() => onOpen(doc.id)}
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            minWidth: 0,
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          <p style={{ fontSize: '13px', fontWeight: isActive ? 600 : 500, color: 'var(--text-primary)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {doc.title || 'Untitled'}
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
+            {getPreviewLines(doc.content).slice(0, 3).map((line, index) => (
+              <p
+                key={`${index}-${line}`}
+                style={{
+                  fontSize: '11px',
+                  lineHeight: '1.4',
+                  color: 'var(--text-muted)',
+                  fontFamily: 'var(--font-ui)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 1,
+                  WebkitBoxOrient: 'vertical',
+                }}
+              >
+                {line}
+              </p>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px', fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+            <span>Last edited {formatRelativeTime(doc.updatedAt)}</span>
+            <span>{getFileSize(doc.content)}</span>
+          </div>
+        </button>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onExport(doc.id); }}
+            title="Export"
+            style={tinyBtnStyle}
+          >
+            <IconDownload />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (window.confirm(`Delete \"${doc.title || 'Untitled'}\"?`)) {
+                onDelete(doc.id);
+              }
+            }}
+            title="Delete"
+            style={tinyBtnStyle}
+          >
+            <IconTrash />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function Sidebar({
@@ -141,46 +281,98 @@ export function Sidebar({
   onOpen,
   onCreate,
   onCreateFolder,
-  onRenameFolder,
-  onDeleteFolder,
+  onEditFolder,
+  onReorderFolders,
+  onReorderDocuments,
   onDelete,
   onExport,
 }: SidebarProps) {
   const [view, setView] = useState<'folders' | 'docs'>('folders');
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [dragItem, setDragItem] = useState<DragItem | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
 
-  const unfiledDocs = useMemo(
-    () =>
-      documents
-        .filter((doc) => doc.folderId === null)
-        .map((doc) => ({
-          ...doc,
-          preview: getPreviewText(doc.content) || 'No content yet.',
-        })),
+  const orderedFolders = useMemo(
+    () => [...folders].sort((a, b) => a.sortOrder - b.sortOrder),
+    [folders]
+  );
+
+  const orderedDocuments = useMemo(
+    () => [...documents].sort((a, b) => a.sortOrder - b.sortOrder),
     [documents]
   );
 
-  const folderRows = useMemo(() => {
-    const rows = folders.map((folder) => ({
+  const unfiledDocs = useMemo(
+    () => orderedDocuments.filter((doc) => doc.folderId === null),
+    [orderedDocuments]
+  );
+
+  const folderRows = useMemo(
+    () => orderedFolders.map((folder) => ({
       id: folder.id,
       name: folder.name,
-      count: documents.filter((doc) => doc.folderId === folder.id).length,
-    }));
-    return rows;
-  }, [documents, folders]);
+      color: folder.color,
+    })),
+    [orderedFolders]
+  );
+
+  const selectedFolder = selectedFolderId === null
+    ? null
+    : folders.find((folder) => folder.id === selectedFolderId) ?? null;
 
   const selectedFolderName = selectedFolderId === null
     ? 'No Folder'
-    : folders.find((folder) => folder.id === selectedFolderId)?.name ?? 'Folder';
+    : selectedFolder?.name ?? 'Folder';
 
   const selectedDocs = useMemo(() => {
-    return documents
-      .filter((doc) => doc.folderId === selectedFolderId)
-      .map((doc) => ({
-        ...doc,
-        preview: getPreviewText(doc.content) || 'No content yet.',
-      }));
-  }, [documents, selectedFolderId]);
+    return orderedDocuments.filter((doc) => doc.folderId === selectedFolderId);
+  }, [orderedDocuments, selectedFolderId]);
+
+  const clearDrag = () => setDragItem(null);
+
+  const clearDropTarget = () => setDropTarget(null);
+
+  const handleFolderDragStart = (event: React.DragEvent<HTMLDivElement>, folderId: string) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', folderId);
+    setDragItem({ kind: 'folder', id: folderId });
+    setDropTarget({ kind: 'folders', folderId: null, beforeId: folderId });
+  };
+
+  const handleDocumentDragStart = (event: React.DragEvent<HTMLDivElement>, doc: Document) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', doc.id);
+    setDragItem({ kind: 'document', id: doc.id, folderId: doc.folderId });
+    setDropTarget({ kind: 'documents', folderId: doc.folderId, beforeId: doc.id });
+  };
+
+  const handleFolderDrop = (targetFolderId: string | null, beforeFolderId: string | null) => {
+    if (!dragItem) return;
+    if (dragItem.kind === 'folder') {
+      onReorderFolders(dragItem.id, beforeFolderId);
+    }
+    if (dragItem.kind === 'document') {
+      onReorderDocuments(dragItem.id, targetFolderId, null);
+    }
+    clearDrag();
+    clearDropTarget();
+  };
+
+  const handleDocumentDrop = (targetFolderId: string | null, beforeDocId: string | null) => {
+    if (!dragItem || dragItem.kind !== 'document') return;
+    onReorderDocuments(dragItem.id, targetFolderId, beforeDocId);
+    clearDrag();
+    clearDropTarget();
+  };
+
+  const handleDragOverTarget = (event: React.DragEvent<HTMLElement>, kind: 'folders' | 'documents', folderId: string | null, nextId: string | null) => {
+    event.preventDefault();
+    if (!dragItem) return;
+    const beforeId = event.clientY < event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2
+      ? (event.currentTarget.dataset.itemId ?? null)
+      : nextId;
+    setDropTarget({ kind, folderId, beforeId });
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -203,6 +395,11 @@ export function Sidebar({
       setView('folders');
     }
   }, [folders, selectedFolderId]);
+
+
+  useEffect(() => {
+    clearDropTarget();
+  }, [view, selectedFolderId]);
 
   return (
     <aside
@@ -266,8 +463,8 @@ export function Sidebar({
         >
           {view === 'folders' ? (
             <>
-              <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)' }}>
-                My Docs
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)' }}>
+                <GrDocumentImage /> MyDoc
               </span>
               <div style={{ display: 'flex', gap: '6px' }}>
                 <button onClick={() => onCreate(null)} title="New document" style={headerBtnStyle}>
@@ -275,9 +472,6 @@ export function Sidebar({
                 </button>
                 <button onClick={onCreateFolder} title="New folder" style={headerBtnStyle}>
                   <IconFolderPlus />
-                </button>
-                <button onClick={onClose} title="Close" style={headerBtnStyle}>
-                  <IconClose />
                 </button>
               </div>
             </>
@@ -309,69 +503,116 @@ export function Sidebar({
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
           {view === 'folders' ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {folderRows.map((row) => (
-                <div
-                  key={row.id ?? 'unfiled'}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-default)',
-                    padding: '8px 10px',
-                    background: 'transparent',
-                  }}
-                >
+            <div
+              style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                handleFolderDrop(null, null);
+              }}
+            >
+              {folderRows.map((row, index) => {
+                const nextFolderId = folderRows[index + 1]?.id ?? null;
+                const isDropBefore = dropTarget?.kind === 'folders' && dropTarget.beforeId === row.id;
+                return (
+                <React.Fragment key={row.id}>
+                  {isDropBefore && dragItem && (
+                    <div
+                      style={dropMarkerStyle}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDropTarget({ kind: 'folders', folderId: null, beforeId: row.id });
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        handleFolderDrop(row.id, row.id);
+                      }}
+                    />
+                  )}
+                  <div
+                    data-item-id={row.id}
+                    draggable
+                    onDragStart={(event) => handleFolderDragStart(event, row.id)}
+                    onDragEnd={() => {
+                      clearDrag();
+                      clearDropTarget();
+                    }}
+                    onDragOver={(event) => handleDragOverTarget(event, 'folders', null, nextFolderId)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      handleFolderDrop(row.id, dropTarget?.beforeId ?? nextFolderId);
+                    }}
+                    style={{
+                      position: 'relative',
+                      padding: '0',
+                      opacity: dragItem?.kind === 'folder' && dragItem.id === row.id ? 0.55 : 1,
+                      cursor: 'grab',
+                    }}
+                  >
                   <button
                     onClick={() => {
                       setSelectedFolderId(row.id);
                       setView('docs');
                     }}
                     style={{
-                      flex: 1,
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '8px',
+                      gap: '10px',
                       minWidth: 0,
-                      background: 'transparent',
+                      width: '100%',
+                      padding: '10px 12px',
+                      paddingRight: '44px',
                       border: 'none',
+                      borderRadius: '6px',
+                      background: 'color-mix(in srgb, var(--bg-sidebar) 82%, gray 4%)',
+                      boxShadow: 'none',
                       cursor: 'pointer',
                       textAlign: 'left',
                     }}
                   >
-                    <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}><IconFolder /></span>
+                    <span style={{ color: row.color, flexShrink: 0 }}><IconFolder /></span>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {row.name}
                       </p>
-                      <p style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
-                        {row.count} {row.count === 1 ? 'document' : 'documents'}
-                      </p>
                     </div>
-                    <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}><IconChevronRight /></span>
                   </button>
 
-                  {row.id !== null && (
-                    <div style={{ display: 'flex', gap: '2px' }}>
-                      <button
-                        style={tinyBtnStyle}
-                        onClick={() => onRenameFolder(row.id as string)}
-                        title={`Rename ${row.name}`}
-                      >
-                        <IconEdit />
-                      </button>
-                      <button
-                        style={tinyBtnStyle}
-                        onClick={() => onDeleteFolder(row.id as string)}
-                        title={`Delete ${row.name}`}
-                      >
-                        <IconTrash />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                  <div style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)' }}>
+                    <button
+                      type="button"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '28px',
+                        height: '28px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'transparent',
+                        color: row.color,
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => onEditFolder(row.id)}
+                      title={`Edit ${row.name}`}
+                    >
+                      <IconEdit />
+                    </button>
+                  </div>
+                  </div>
+                </React.Fragment>
+              );})}
+
+              {dropTarget?.kind === 'folders' && dropTarget.beforeId === null && dragItem && (
+                <div
+                  style={dropMarkerStyle}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    handleFolderDrop(null, null);
+                  }}
+                />
+              )}
 
               {unfiledDocs.length > 0 && (
                 <>
@@ -389,190 +630,153 @@ export function Sidebar({
                   >
                     Unfiled Documents
                   </p>
-                  {unfiledDocs.map((doc) => {
-                    const isActive = doc.id === activeDocId;
-                    return (
-                      <div
-                        key={doc.id}
-                        style={{
-                          borderRadius: '8px',
-                          background: isActive ? 'var(--bg-active)' : 'transparent',
-                          border: `1px solid ${isActive ? 'var(--border-strong)' : 'var(--border-default)'}`,
-                          padding: '8px 9px',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                          <button
-                            onClick={() => onOpen(doc.id)}
-                            style={{
-                              flex: 1,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              minWidth: 0,
-                              background: 'transparent',
-                              border: 'none',
-                              cursor: 'pointer',
-                              textAlign: 'left',
+                  <div
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (dragItem?.kind === 'document') {
+                        onReorderDocuments(dragItem.id, null, null);
+                        clearDrag();
+                        clearDropTarget();
+                      }
+                    }}
+                    style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}
+                  >
+                    {unfiledDocs.map((doc, index) => {
+                      const nextDocId = unfiledDocs[index + 1]?.id ?? null;
+                      const isDropBefore = dropTarget?.kind === 'documents' && dropTarget.folderId === null && dropTarget.beforeId === doc.id;
+                      return (
+                        <React.Fragment key={doc.id}>
+                          {isDropBefore && dragItem && (
+                            <div
+                              style={dropMarkerStyle}
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                setDropTarget({ kind: 'documents', folderId: null, beforeId: doc.id });
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                handleDocumentDrop(null, doc.id);
+                              }}
+                            />
+                          )}
+                          <div
+                            data-item-id={doc.id}
+                            onDragOver={(event) => handleDragOverTarget(event, 'documents', null, nextDocId)}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              handleDocumentDrop(null, dropTarget?.beforeId ?? nextDocId);
                             }}
                           >
-                            <span style={{ color: isActive ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0 }}>
-                              <IconDoc />
-                            </span>
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <p style={{ fontSize: '13px', fontWeight: isActive ? 600 : 500, color: 'var(--text-primary)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {doc.title || 'Untitled'}
-                              </p>
-                              <p style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {doc.preview}
-                              </p>
-                            </div>
-                          </button>
-
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); onExport(doc.id); }}
-                              title="Export"
-                              style={tinyBtnStyle}
-                            >
-                              <IconDownload />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (window.confirm(`Delete \"${doc.title || 'Untitled'}\"?`)) {
-                                  onDelete(doc.id);
-                                }
+                            <DocumentCard
+                              doc={doc}
+                              isActive={doc.id === activeDocId}
+                              isDragging={dragItem?.kind === 'document' && dragItem.id === doc.id}
+                              onOpen={onOpen}
+                              onDelete={onDelete}
+                              onExport={onExport}
+                              onDragStart={handleDocumentDragStart}
+                              onDragEnd={() => {
+                                clearDrag();
+                                clearDropTarget();
                               }}
-                              title="Delete"
-                              style={tinyBtnStyle}
-                            >
-                              <IconTrash />
-                            </button>
+                            />
                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        </React.Fragment>
+                      );
+                    })}
+                    {dropTarget?.kind === 'documents' && dropTarget.folderId === null && dropTarget.beforeId === null && dragItem && (
+                      <div
+                        style={dropMarkerStyle}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          handleDocumentDrop(null, null);
+                        }}
+                      />
+                    )}
+                  </div>
                 </>
               )}
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div
+              style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (dragItem?.kind === 'document' && selectedFolderId !== null) {
+                  onReorderDocuments(dragItem.id, selectedFolderId, null);
+                  clearDrag();
+                  clearDropTarget();
+                }
+              }}
+            >
               {selectedDocs.length === 0 ? (
                 <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', padding: '24px', fontFamily: 'var(--font-ui)' }}>
                   No documents in this folder yet
                 </p>
               ) : (
-                selectedDocs.map((doc) => {
-                  const isActive = doc.id === activeDocId;
-                  return (
-                    <div
-                      key={doc.id}
-                      style={{
-                        borderRadius: '8px',
-                        background: isActive ? 'var(--bg-active)' : 'transparent',
-                        border: `1px solid ${isActive ? 'var(--border-strong)' : 'var(--border-default)'}`,
-                        padding: '8px 9px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <button
-                          onClick={() => onOpen(doc.id)}
-                          style={{
-                            flex: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            minWidth: 0,
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            textAlign: 'left',
+                <>
+                  {selectedDocs.map((doc, index) => {
+                    const nextDocId = selectedDocs[index + 1]?.id ?? null;
+                    const isDropBefore = dropTarget?.kind === 'documents' && dropTarget.folderId === selectedFolderId && dropTarget.beforeId === doc.id;
+                    return (
+                      <React.Fragment key={doc.id}>
+                        {isDropBefore && dragItem && (
+                          <div
+                            style={dropMarkerStyle}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              setDropTarget({ kind: 'documents', folderId: selectedFolderId, beforeId: doc.id });
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              handleDocumentDrop(selectedFolderId, doc.id);
+                            }}
+                          />
+                        )}
+                        <div
+                          data-item-id={doc.id}
+                          onDragOver={(event) => handleDragOverTarget(event, 'documents', selectedFolderId, nextDocId)}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            handleDocumentDrop(selectedFolderId, dropTarget?.beforeId ?? nextDocId);
                           }}
                         >
-                          <span style={{ color: isActive ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0 }}>
-                            <IconDoc />
-                          </span>
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <p style={{ fontSize: '13px', fontWeight: isActive ? 600 : 500, color: 'var(--text-primary)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {doc.title || 'Untitled'}
-                            </p>
-                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {doc.preview}
-                            </p>
-                          </div>
-                        </button>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onExport(doc.id); }}
-                            title="Export"
-                            style={tinyBtnStyle}
-                          >
-                            <IconDownload />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.confirm(`Delete \"${doc.title || 'Untitled'}\"?`)) {
-                                onDelete(doc.id);
-                              }
+                          <DocumentCard
+                            doc={doc}
+                            isActive={doc.id === activeDocId}
+                            isDragging={dragItem?.kind === 'document' && dragItem.id === doc.id}
+                            onOpen={onOpen}
+                            onDelete={onDelete}
+                            onExport={onExport}
+                            onDragStart={handleDocumentDragStart}
+                            onDragEnd={() => {
+                              clearDrag();
+                              clearDropTarget();
                             }}
-                            title="Delete"
-                            style={tinyBtnStyle}
-                          >
-                            <IconTrash />
-                          </button>
+                          />
                         </div>
-                      </div>
-                    </div>
-                  );
-                })
+                      </React.Fragment>
+                    );
+                  })}
+                  {dropTarget?.kind === 'documents' && dropTarget.folderId === selectedFolderId && dropTarget.beforeId === null && dragItem && (
+                    <div
+                      style={dropMarkerStyle}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        handleDocumentDrop(selectedFolderId, null);
+                      }}
+                    />
+                  )}
+                </>
               )}
             </div>
           )}
         </div>
-        <div style={{
-          padding: '12px',
-          borderTop: '1px solid var(--border-default)',
-          fontSize: '12px',
-          color: 'var(--text-muted)',
-          fontFamily: 'var(--font-ui)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
-          alignItems: 'flex-start',
-        }}>
-          <p style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)' }}>MyDoc</p>
-          <p style={{ lineHeight: 1.45 }}>
-            An open-source markdown based editor designed for simplicity. Everything is autosaved locally and never leaves your device.
-          </p>
-          <p style={{ lineHeight: 1, fontSize: '11px' }}>
-            Developed by {' '}
-            <a
-              href="https://emjjkk.tech"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: '2px' }}
-            >
-              @emjjkk
-            </a>
-          </p>
-          <p style={{ lineHeight: 1, fontSize: '11px' }}>
-            Github repo {' '}
-            <a
-              href="https://github.com/emjjkk/mydoc"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: '2px' }}
-            >
-              emjjkk/mydoc
-            </a>
-          </p>
-        </div>
       </div>
-      
     </aside>
   );
 }
@@ -603,4 +807,12 @@ const tinyBtnStyle: React.CSSProperties = {
   color: 'var(--text-muted)',
   cursor: 'pointer',
   transition: 'all 0.12s',
+};
+
+const dropMarkerStyle: React.CSSProperties = {
+  height: '10px',
+  borderRadius: '999px',
+  margin: '2px 0',
+  background: 'color-mix(in srgb, var(--accent) 26%, transparent)',
+  border: '1px solid color-mix(in srgb, var(--accent) 40%, transparent)',
 };

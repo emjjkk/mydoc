@@ -28,6 +28,7 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
     handleEnter,
     handleTextChange,
     handleBackspaceOnEmpty,
+    mergeBlockWithPrevious,
     handleArrowNavigation,
     handleImagePaste,
     handleMarkdownPaste,
@@ -155,6 +156,13 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
     [applyBlockFormat, applyInlineFormat, insertBlock, focusedBlockId, handleImagePaste, restoreCurrentSelection]
   );
 
+  const handleToolbarInteract = useCallback(() => {
+    saveCurrentSelection();
+    requestAnimationFrame(() => {
+      restoreCurrentSelection();
+    });
+  }, [restoreCurrentSelection, saveCurrentSelection]);
+
   // Handle blur from a block — intentional no-op.
   // focusedBlockId is set by the next block's onFocus, so we never clear it here
   // to prevent toolbar flicker during block transitions.
@@ -198,6 +206,7 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
               onTextChange={handleTextChange}
               onEnter={handleEnter}
               onBackspaceEmpty={handleBackspaceOnEmpty}
+              onBackspaceJoinPrevious={mergeBlockWithPrevious}
               onArrow={handleArrowNavigation}
               onImagePaste={handleImagePaste}
               onMarkdownPaste={handleMarkdownPaste}
@@ -221,6 +230,7 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
         blocks={blocks}
         sidebarOffset={sidebarOffset}
         onAction={handleToolbarFormat}
+        onToolbarInteract={handleToolbarInteract}
       />
     </div>
   );

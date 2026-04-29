@@ -9,7 +9,7 @@ import { ExportModal } from '@/components/modals/ExportModal';
 import { NewFolderModal } from '@/components/modals/NewFolderModal';
 import { PreferencesModal } from '@/components/modals/PreferencesModal';
 import { InstallPwaButton } from '@/components/InstallPwaButton';
-import { registerServiceWorker } from '@/lib/serviceWorkerRegistration';
+import { registerServiceWorker, unregisterServiceWorker } from '@/lib/serviceWorkerRegistration';
 import { Sidebar } from '../components/Sidebar';
 
 function useDebouncedCallback<T extends (...args: never[]) => void>(
@@ -39,6 +39,9 @@ export default function NotesApp() {
     deleteDocument,
     createFolder,
     renameFolder,
+    updateFolder,
+    reorderFolders,
+    reorderDocuments,
     deleteFolder,
   } = useDocuments();
 
@@ -53,13 +56,19 @@ export default function NotesApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [savingStatus, setSavingStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const savingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    registerServiceWorker();
+    if (process.env.NODE_ENV === 'production') {
+      registerServiceWorker();
+      return;
+    }
+
+    void unregisterServiceWorker();
   }, []);
 
   useEffect(() => {
@@ -161,24 +170,15 @@ export default function NotesApp() {
           createDocument(folderId ?? null);
         }}
         onCreateFolder={() => {
+          setEditingFolderId(null);
           setNewFolderOpen(true);
         }}
-        onRenameFolder={(id: string) => {
-          const folder = folders.find((item) => item.id === id);
-          if (!folder) return;
-          const name = window.prompt('Rename folder', folder.name);
-          if (!name) return;
-          renameFolder(id, name);
+        onEditFolder={(id: string) => {
+          setEditingFolderId(id);
+          setNewFolderOpen(true);
         }}
-        onDeleteFolder={(id: string) => {
-          const folder = folders.find((item) => item.id === id);
-          if (!folder) return;
-          const confirmed = window.confirm(
-            `Delete folder "${folder.name}"? Documents in it will move to No Folder.`
-          );
-          if (!confirmed) return;
-          deleteFolder(id);
-        }}
+        onReorderFolders={reorderFolders}
+        onReorderDocuments={reorderDocuments}
         onDelete={deleteDocument}
         onExport={handleSidebarExport}
       />
@@ -223,11 +223,28 @@ export default function NotesApp() {
 
       <NewFolderModal
         isOpen={newFolderOpen}
+        mode={editingFolderId ? 'edit' : 'create'}
+        initialName={editingFolderId ? (folders.find((item) => item.id === editingFolderId)?.name ?? '') : ''}
+        initialColor={editingFolderId ? (folders.find((item) => item.id === editingFolderId)?.color ?? undefined) : undefined}
         onClose={() => setNewFolderOpen(false)}
-        onSubmit={(name) => {
-          createFolder(name);
+        onSubmit={(name, color) => {
+          if (editingFolderId) {
+            updateFolder(editingFolderId, { name, color });
+          } else {
+            createFolder(name, color);
+          }
           setNewFolderOpen(false);
         }}
+        onDelete={editingFolderId ? () => {
+          const folder = folders.find((item) => item.id === editingFolderId);
+          if (!folder) return;
+          const confirmed = window.confirm(
+            `Delete folder "${folder.name}"? Documents in it will move to No Folder.`
+          );
+          if (!confirmed) return;
+          deleteFolder(editingFolderId);
+          setNewFolderOpen(false);
+        } : undefined}
       />
 
       <PreferencesModal

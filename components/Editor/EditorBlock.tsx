@@ -23,6 +23,7 @@ interface EditorBlockProps {
   onTextChange: (id: string, text: string) => void;
   onEnter: (id: string, currentText: string, caretOffset: number) => void;
   onBackspaceEmpty: (id: string) => void;
+  onBackspaceJoinPrevious: (id: string) => void;
   onArrow: (id: string, dir: 'up' | 'down') => void;
   onImagePaste: (id: string, file: File) => boolean;
   onMarkdownPaste: (id: string, text: string) => boolean;
@@ -90,6 +91,26 @@ function htmlToMarkdown(html: string): string {
     .trim();
 }
 
+function htmlToMarkdownWithoutTrim(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<strong><em>([\s\S]*?)<\/em><\/strong>/gi, '***$1***')
+    .replace(/<em><strong>([\s\S]*?)<\/strong><\/em>/gi, '***$1***')
+    .replace(/<strong>([\s\S]*?)<\/strong>/gi, '**$1**')
+    .replace(/<em>([\s\S]*?)<\/em>/gi, '*$1*')
+    .replace(/<del>([\s\S]*?)<\/del>/gi, '~~$1~~')
+    .replace(/<code>([\s\S]*?)<\/code>/gi, '`$1`')
+    .replace(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+    .replace(/<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*\/??>/gi, '![$2]($1)')
+    .replace(/<img[^>]*alt="([^"]*)"[^>]*src="([^"]*)"[^>]*\/??>/gi, '![$1]($2)')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"');
+}
+
 // Get char caret offset inside a contenteditable
 function getCaretOffset(el: HTMLElement): number {
   const sel = window.getSelection();
@@ -99,6 +120,31 @@ function getCaretOffset(el: HTMLElement): number {
   pre.selectNodeContents(el);
   pre.setEnd(range.startContainer, range.startOffset);
   return pre.toString().length;
+}
+
+function getMarkdownCaretOffset(el: HTMLElement): number {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return 0;
+  const range = sel.getRangeAt(0);
+  const pre = range.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.startContainer, range.startOffset);
+  const fragment = pre.cloneContents();
+  const temp = document.createElement('div');
+  temp.appendChild(fragment);
+  return htmlToMarkdownWithoutTrim(temp.innerHTML).length;
+}
+
+function hasActiveSelection(): boolean {
+  const sel = window.getSelection();
+  return !!sel && sel.rangeCount > 0 && !sel.isCollapsed;
+}
+
+function selectionIsInside(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  return el.contains(range.startContainer) && el.contains(range.endContainer);
 }
 
 export const EditorBlock = React.memo(function EditorBlock({
@@ -112,6 +158,7 @@ export const EditorBlock = React.memo(function EditorBlock({
   onTextChange,
   onEnter,
   onBackspaceEmpty,
+  onBackspaceJoinPrevious,
   onArrow,
   onImagePaste,
   onMarkdownPaste,
@@ -202,17 +249,19 @@ export const EditorBlock = React.memo(function EditorBlock({
     prevFocusedRef.current = isFocused;
     const el = elRef.current;
     if (!el || block.type === 'code' || block.type === 'table') return;
+    if (hasActiveSelection()) return;
     if (el.innerHTML !== renderedHtml) {
       el.innerHTML = renderedHtml;
-      try {
-        const range = document.createRange();
-        const sel = window.getSelection();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        sel?.removeAllRanges();
-        sel?.addRange(range);
-      } catch { /* ignore */ }
     }
+    if (selectionIsInside(el)) return;
+    try {
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    } catch { /* ignore */ }
   }, [isFocused, block.id, renderedHtml, block.type]);
 
   // ── Table block ──────────────────────────────────────────────────────────
@@ -320,15 +369,31 @@ export const EditorBlock = React.memo(function EditorBlock({
       if (e.key === 'Enter' && !e.shiftKey) {
         if (block.type === 'code') return;
         const text = htmlToMarkdown(el.innerHTML);
-        const caretOffset = getCaretOffset(el);
+        const caretOffset = getMarkdownCaretOffset(el);
+        const splitAt = Math.max(0, Math.min(caretOffset, text.length));
+        const beforeText = text.slice(0, splitAt);
+        el.innerHTML = parseInlineMarkdown(beforeText);
+        lastMarkdownRef.current = beforeText;
         skipNextBlurSyncRef.current = true;
         e.preventDefault();
         onEnter(block.id, text, caretOffset);
         return;
       }
 
-      if (e.key === 'Backspace' && (el.textContent ?? '').trim() === '') {
-        e.preventDefault(); onBackspaceEmpty(block.id); return;
+      if (e.key === 'Backspace') {
+        const isEmpty = (el.textContent ?? '').trim() === '';
+        if (isEmpty) {
+          e.preventDefault();
+          onBackspaceEmpty(block.id);
+          return;
+        }
+
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0 && sel.isCollapsed && getCaretOffset(el) === 0) {
+          e.preventDefault();
+          onBackspaceJoinPrevious(block.id);
+          return;
+        }
       }
 
       if (e.key === 'ArrowUp') {
@@ -611,9 +676,11 @@ function CodeBlockEditable({
     prevFocusedRef.current = isFocused;
     const el = preRef.current;
     if (!el) return;
+    if (hasActiveSelection()) return;
     if (el.textContent !== block.text) {
       el.textContent = block.text;
     }
+    if (selectionIsInside(el)) return;
     try {
       const range = document.createRange();
       const sel = window.getSelection();
@@ -765,13 +832,15 @@ function TableBlock({
                         suppressContentEditableWarning
                         className="table-cell-input"
                         onBlur={(e) => {
+                          const nextHeader = htmlToMarkdown(e.currentTarget.innerHTML);
+                          if (nextHeader === headers[ci]) return;
                           const h = [...headers];
-                          h[ci] = e.currentTarget.textContent ?? '';
+                          h[ci] = nextHeader;
                           setHeaders(h);
                           save(h, rows);
                         }}
                         onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
-                        dangerouslySetInnerHTML={{ __html: header }}
+                        dangerouslySetInnerHTML={{ __html: parseInlineMarkdown(header) }}
                       />
                       {isFocused && headers.length > 1 && (
                         <button
@@ -813,8 +882,10 @@ function TableBlock({
                         suppressContentEditableWarning
                         className="table-cell-input"
                         onBlur={(e) => {
+                          const nextCell = htmlToMarkdown(e.currentTarget.innerHTML);
+                          if (nextCell === row[ci]) return;
                           const r = rows.map((rw, rIdx) =>
-                            rIdx === ri ? rw.map((c, cIdx) => cIdx === ci ? (e.currentTarget.textContent ?? '') : c) : rw
+                            rIdx === ri ? rw.map((c, cIdx) => cIdx === ci ? nextCell : c) : rw
                           );
                           setRows(r); save(headers, r);
                         }}
@@ -829,7 +900,7 @@ function TableBlock({
                             all[idx + (e.shiftKey ? -1 : 1)]?.focus();
                           }
                         }}
-                        dangerouslySetInnerHTML={{ __html: cell }}
+                        dangerouslySetInnerHTML={{ __html: parseInlineMarkdown(cell) }}
                       />
                     </td>
                   ))}

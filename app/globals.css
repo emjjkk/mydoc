@@ -328,6 +328,7 @@ html, body {
 }
 
 .editor-block.is-h1 { font-size: 2.1em; font-weight: 700; line-height: 1.18; letter-spacing: -0.022em; }
+.editor-block.is-h1 { margin-block: 0; }
 .editor-block.is-h2 { font-size: 1.65em; font-weight: 600; line-height: 1.26; letter-spacing: -0.015em; }
 .editor-block.is-h3 { font-size: 1.3em; font-weight: 600; line-height: 1.32; }
 .editor-block.is-h4 { font-size: 1.1em; font-weight: 600; line-height: 1.4; }

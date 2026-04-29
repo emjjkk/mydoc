@@ -1,11 +1,16 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { FOLDER_COLOR_OPTIONS } from '@/hooks/useDocuments';
 
 interface NewFolderModalProps {
   isOpen: boolean;
+  mode: 'create' | 'edit';
+  initialName?: string;
+  initialColor?: string;
   onClose: () => void;
-  onSubmit: (name: string) => void;
+  onSubmit: (name: string, color: string) => void;
+  onDelete?: () => void;
 }
 
 function IconX() {
@@ -16,14 +21,24 @@ function IconX() {
   );
 }
 
-export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProps) {
+export function NewFolderModal({
+  isOpen,
+  mode,
+  initialName = '',
+  initialColor = FOLDER_COLOR_OPTIONS[0],
+  onClose,
+  onSubmit,
+  onDelete,
+}: NewFolderModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName);
+  const [color, setColor] = useState(initialColor);
 
   useEffect(() => {
     if (!isOpen) return;
-    setName('');
+    setName(initialName);
+    setColor(initialColor);
     const timer = setTimeout(() => inputRef.current?.focus(), 10);
     function handler(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
@@ -33,9 +48,10 @@ export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProp
       clearTimeout(timer);
       window.removeEventListener('keydown', handler);
     };
-  }, [isOpen, onClose]);
+  }, [initialColor, initialName, isOpen, onClose]);
 
   if (!isOpen) return null;
+  const hasName = name.trim().length > 0;
 
   return (
     <div
@@ -59,12 +75,12 @@ export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProp
           e.preventDefault();
           const normalized = name.trim();
           if (!normalized) return;
-          onSubmit(normalized);
+          onSubmit(normalized, color);
         }}
         style={{
           background: 'var(--bg-modal)',
           border: '1px solid var(--border-default)',
-          borderRadius: '14px',
+          borderRadius: '12px',
           boxShadow: 'var(--shadow-modal)',
           width: '100%',
           maxWidth: '420px',
@@ -80,10 +96,12 @@ export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProp
         }}>
           <div>
             <h2 style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: 'var(--font-ui)', marginBottom: '2px' }}>
-              New Folder
+              {mode === 'edit' ? 'Edit Folder' : 'New Folder'}
             </h2>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
-              Choose a clear name for your document group
+              {mode === 'edit'
+                ? 'Update the folder name, color, or delete it.'
+                : 'Choose a clear name and color for your document group.'}
             </p>
           </div>
           <button
@@ -122,6 +140,36 @@ export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProp
               outline: 'none',
             }}
           />
+
+          <div style={{ marginTop: '16px' }}>
+            <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', marginBottom: '8px' }}>
+              Folder Color
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+              {FOLDER_COLOR_OPTIONS.map((option) => {
+                const selected = option === color;
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setColor(option)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      height: '34px',
+                      borderRadius: '9px',
+                      border: `1px solid ${selected ? option : 'var(--border-default)'}`,
+                      background: selected ? `color-mix(in srgb, ${option} 18%, transparent)` : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ width: '14px', height: '14px', borderRadius: '999px', background: option, boxShadow: selected ? `0 0 0 3px color-mix(in srgb, ${option} 18%, transparent)` : 'none' }} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <div style={{
@@ -129,7 +177,22 @@ export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProp
           display: 'flex',
           justifyContent: 'flex-end',
           gap: '8px',
+          alignItems: 'center',
         }}>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              style={{
+                ...secondaryBtnStyle,
+                borderColor: 'rgba(239, 68, 68, 0.28)',
+                color: '#ef4444',
+                marginRight: 'auto',
+              }}
+            >
+              Delete Folder
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -139,14 +202,14 @@ export function NewFolderModal({ isOpen, onClose, onSubmit }: NewFolderModalProp
           </button>
           <button
             type="submit"
-            disabled={!name.trim()}
+            disabled={!hasName}
             style={{
               ...primaryBtnStyle,
-              opacity: name.trim() ? 1 : 0.5,
-              cursor: name.trim() ? 'pointer' : 'not-allowed',
+              opacity: hasName ? 1 : 0.5,
+              cursor: hasName ? 'pointer' : 'not-allowed',
             }}
           >
-            Create Folder
+            {mode === 'edit' ? 'Save Changes' : 'Create Folder'}
           </button>
         </div>
       </form>
