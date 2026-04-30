@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useCallback, useRef, useMemo } from 'react';
 import { useMarkdownEditor } from './useMarkdownEditor';
 import { EditorBlock } from './EditorBlock';
 import { FloatingToolbar } from './FloatingToolbar';
@@ -170,6 +170,27 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
     // no-op: toolbar stays visible, focus state maintained until new block focused
   }, []);
 
+  const blocksWithOrdinals = useMemo<Array<{ block: typeof blocks[number]; listOrdinal: number | null }>>(() => {
+    let currentOrdinal = 0;
+
+    return blocks.map((block, index) => {
+      const previousBlock = blocks[index - 1];
+      const isOrderedList = block.type === 'ol';
+      const isContinuation = isOrderedList && previousBlock?.type === 'ol';
+
+      if (isOrderedList) {
+        currentOrdinal = isContinuation ? currentOrdinal + 1 : 1;
+      } else {
+        currentOrdinal = 0;
+      }
+
+      return {
+        block,
+        listOrdinal: isOrderedList ? currentOrdinal : null,
+      };
+    });
+  }, [blocks]);
+
   return (
     <div
       className="flex-1 overflow-y-auto relative editor-scroll-area"
@@ -193,7 +214,7 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
           onKeyUp={saveCurrentSelection}
           onClick={handleEditorClick}
         >
-          {blocks.map((block, idx) => (
+          {blocksWithOrdinals.map(({ block, listOrdinal }, idx: number) => (
             <EditorBlock
               key={block.id}
               block={block}
@@ -201,6 +222,7 @@ export function Editor({ docId, content, contentWidth, fontCss, sidebarOffset, o
               isFocused={focusedBlockId === block.id}
               blockIndex={idx}
               totalBlocks={blocks.length}
+              listOrdinal={listOrdinal}
               onFocus={setFocusedBlockId}
               onBlur={handleBlockBlur}
               onTextChange={handleTextChange}

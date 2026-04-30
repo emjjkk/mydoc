@@ -157,16 +157,15 @@ function formatRelativeTime(timestamp: number): string {
   return `${days}d ago`;
 }
 
-function getCardSurface(active: boolean, accent?: string): React.CSSProperties {
+function getListItemSurface(isDragging: boolean, isLast: boolean): React.CSSProperties {
   return {
-    borderRadius: '6px',
+    borderRadius: 0,
     border: 'none',
-    background: active
-      ? accent
-        ? `color-mix(in srgb, ${accent} 12%, var(--foreground) 88%)`
-        : 'var(--bg-active)'
-      : 'color-mix(in srgb, var(--bg-sidebar) 82%, gray 4%)',
+    borderBottom: isLast ? 'none' : '1px solid var(--border-default)',
+    background: 'transparent',
     boxShadow: 'none',
+    opacity: isDragging ? 0.55 : 1,
+    transition: 'opacity 0.12s ease',
   };
 }
 
@@ -174,6 +173,7 @@ function DocumentCard({
   doc,
   isActive,
   isDragging,
+  isLast,
   onOpen,
   onDelete,
   onExport,
@@ -183,6 +183,7 @@ function DocumentCard({
   doc: Document;
   isActive: boolean;
   isDragging: boolean;
+  isLast: boolean;
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
   onExport: (id: string) => void;
@@ -195,10 +196,9 @@ function DocumentCard({
       onDragStart={(event) => onDragStart(event, doc)}
       onDragEnd={onDragEnd}
       style={{
-        ...getCardSurface(isActive),
-        padding: '10px 11px',
+        ...getListItemSurface(isDragging, isLast),
+        padding: '12px 0px ',
         cursor: 'grab',
-        opacity: isDragging ? 0.55 : 1,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0 }}>
@@ -456,7 +456,7 @@ export function Sidebar({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '10px 12px',
+            padding: '10px 16px',
             minHeight: '50px',
             borderBottom: '1px solid var(--border-default)',
           }}
@@ -501,10 +501,10 @@ export function Sidebar({
           )}
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px' }}>
           {view === 'folders' ? (
             <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}
+              style={{ display: 'flex', flexDirection: 'column' }}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
@@ -514,6 +514,7 @@ export function Sidebar({
               {folderRows.map((row, index) => {
                 const nextFolderId = folderRows[index + 1]?.id ?? null;
                 const isDropBefore = dropTarget?.kind === 'folders' && dropTarget.beforeId === row.id;
+                const isLast = index === folderRows.length - 1;
                 return (
                 <React.Fragment key={row.id}>
                   {isDropBefore && dragItem && (
@@ -547,6 +548,7 @@ export function Sidebar({
                       padding: '0',
                       opacity: dragItem?.kind === 'folder' && dragItem.id === row.id ? 0.55 : 1,
                       cursor: 'grab',
+                      borderBottom: isLast ? 'none' : '1px solid var(--border-default)',
                     }}
                   >
                   <button
@@ -558,13 +560,12 @@ export function Sidebar({
                       display: 'flex',
                       alignItems: 'center',
                       gap: '10px',
-                      minWidth: 0,
-                      width: '100%',
-                      padding: '10px 12px',
-                      paddingRight: '44px',
+                      width: 'auto',
+                      padding: '12px 0px',
+                      margin: '0px',
                       border: 'none',
-                      borderRadius: '6px',
-                      background: 'color-mix(in srgb, var(--bg-sidebar) 82%, gray 4%)',
+                      borderRadius: 0,
+                      background: 'transparent',
                       boxShadow: 'none',
                       cursor: 'pointer',
                       textAlign: 'left',
@@ -578,7 +579,7 @@ export function Sidebar({
                     </div>
                   </button>
 
-                  <div style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)' }}>
+                  <div style={{ position: 'absolute', right: '0px', top: '50%', transform: 'translateY(-50%)' }}>
                     <button
                       type="button"
                       style={{
@@ -640,11 +641,12 @@ export function Sidebar({
                         clearDropTarget();
                       }
                     }}
-                    style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}
+                    style={{ display: 'flex', flexDirection: 'column' }}
                   >
                     {unfiledDocs.map((doc, index) => {
                       const nextDocId = unfiledDocs[index + 1]?.id ?? null;
                       const isDropBefore = dropTarget?.kind === 'documents' && dropTarget.folderId === null && dropTarget.beforeId === doc.id;
+                      const isLast = index === unfiledDocs.length - 1;
                       return (
                         <React.Fragment key={doc.id}>
                           {isDropBefore && dragItem && (
@@ -672,6 +674,7 @@ export function Sidebar({
                               doc={doc}
                               isActive={doc.id === activeDocId}
                               isDragging={dragItem?.kind === 'document' && dragItem.id === doc.id}
+                              isLast={isLast}
                               onOpen={onOpen}
                               onDelete={onDelete}
                               onExport={onExport}
@@ -701,7 +704,7 @@ export function Sidebar({
             </div>
           ) : (
             <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}
+              style={{ display: 'flex', flexDirection: 'column' }}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
@@ -721,6 +724,7 @@ export function Sidebar({
                   {selectedDocs.map((doc, index) => {
                     const nextDocId = selectedDocs[index + 1]?.id ?? null;
                     const isDropBefore = dropTarget?.kind === 'documents' && dropTarget.folderId === selectedFolderId && dropTarget.beforeId === doc.id;
+                    const isLast = index === selectedDocs.length - 1;
                     return (
                       <React.Fragment key={doc.id}>
                         {isDropBefore && dragItem && (
@@ -748,6 +752,7 @@ export function Sidebar({
                             doc={doc}
                             isActive={doc.id === activeDocId}
                             isDragging={dragItem?.kind === 'document' && dragItem.id === doc.id}
+                            isLast={isLast}
                             onOpen={onOpen}
                             onDelete={onDelete}
                             onExport={onExport}
@@ -775,6 +780,21 @@ export function Sidebar({
               )}
             </div>
           )}
+        </div>
+
+        <div
+          style={{
+            padding: '10px 12px',
+            borderTop: '1px solid var(--border-default)',
+            background: 'color-mix(in srgb, var(--bg-sidebar) 88%, var(--bg-modal) 12%)',
+            color: 'var(--text-secondary)',
+            fontFamily: 'var(--font-ui)',
+            fontSize: '11px',
+            lineHeight: '1.45',
+            textAlign: 'center',
+          }}
+        >
+          MyDoc, built with 🧃 by @emjjkk.<br/>
         </div>
       </div>
     </aside>

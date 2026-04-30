@@ -18,6 +18,7 @@ interface EditorBlockProps {
   isFocused: boolean;
   blockIndex: number;
   totalBlocks: number;
+  listOrdinal: number | null;
   onFocus: (id: string) => void;
   onBlur: (id: string) => void;
   onTextChange: (id: string, text: string) => void;
@@ -153,6 +154,7 @@ export const EditorBlock = React.memo(function EditorBlock({
   isFocused,
   blockIndex,
   totalBlocks,
+  listOrdinal,
   onFocus,
   onBlur,
   onTextChange,
@@ -297,7 +299,7 @@ export const EditorBlock = React.memo(function EditorBlock({
       >
         <BlockGutter
           blockType={block.type} isHovered={isHovered} isFocused={isFocused}
-          blockIndex={blockIndex} totalBlocks={totalBlocks}
+          blockIndex={blockIndex} totalBlocks={totalBlocks} listOrdinal={null}
           showMenu={showMenu} setShowMenu={setShowMenu} menuRef={menuRef}
           onMoveUp={() => onMoveBlock(block.id, 'up')}
           onMoveDown={() => onMoveBlock(block.id, 'down')}
@@ -557,7 +559,7 @@ export const EditorBlock = React.memo(function EditorBlock({
       >
         <BlockGutter
           blockType={block.type} isHovered={isHovered} isFocused={isFocused}
-          blockIndex={blockIndex} totalBlocks={totalBlocks}
+          blockIndex={blockIndex} totalBlocks={totalBlocks} listOrdinal={null}
           showMenu={showMenu} setShowMenu={setShowMenu} menuRef={menuRef}
           onMoveUp={() => onMoveBlock(block.id, 'up')}
           onMoveDown={() => onMoveBlock(block.id, 'down')}
@@ -597,6 +599,7 @@ export const EditorBlock = React.memo(function EditorBlock({
   // ── List blocks ───────────────────────────────────────────────────────────
   const gutterProps = {
     blockType: block.type, isHovered, isFocused, blockIndex, totalBlocks,
+    listOrdinal,
     showMenu, setShowMenu, menuRef,
     onMoveUp: () => onMoveBlock(block.id, 'up'),
     onMoveDown: () => onMoveBlock(block.id, 'down'),
@@ -619,7 +622,12 @@ export const EditorBlock = React.memo(function EditorBlock({
         onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}
         onMouseDown={handleWrapperPress} onTouchStart={handleWrapperPress}>
         <BlockGutter {...gutterProps} />
-        <ol className="editor-list-wrap">{React.createElement('li', contentProps as never)}</ol>
+        <div className="editor-list-wrap editor-ordered-list">
+          <span className="editor-list-number" aria-hidden="true">
+            {listOrdinal ?? 1}.
+          </span>
+          {React.createElement('div', contentProps as never)}
+        </div>
       </div>
     );
   }
@@ -809,7 +817,7 @@ function TableBlock({
     >
       <BlockGutter
         blockType="table" isHovered={isHovered} isFocused={isFocused}
-        blockIndex={blockIndex} totalBlocks={totalBlocks}
+        blockIndex={blockIndex} totalBlocks={totalBlocks} listOrdinal={null}
         showMenu={showMenu} setShowMenu={setShowMenu} menuRef={menuRef}
         onMoveUp={() => onMoveBlock(block.id, 'up')}
         onMoveDown={() => onMoveBlock(block.id, 'down')}
@@ -946,17 +954,20 @@ function TableBlock({
 interface BlockGutterProps {
   blockType: string; isHovered: boolean; isFocused: boolean;
   blockIndex: number; totalBlocks: number;
+  listOrdinal: number | null;
   showMenu: boolean; setShowMenu: (v: boolean) => void;
   menuRef: React.RefObject<HTMLDivElement | null>;
   onMoveUp: () => void; onMoveDown: () => void; onDelete: () => void;
 }
 
 function BlockGutter({
-  blockType, isHovered, isFocused, blockIndex, totalBlocks,
+  blockType, isHovered, isFocused, blockIndex, totalBlocks, listOrdinal,
   showMenu, setShowMenu, menuRef, onMoveUp, onMoveDown, onDelete,
 }: BlockGutterProps) {
   const visible = isHovered || isFocused;
-  const label = BLOCK_TYPE_LABELS[blockType] ?? 'P';
+  const label = blockType === 'ol'
+    ? `${listOrdinal ?? 1}.`
+    : (BLOCK_TYPE_LABELS[blockType] ?? 'P');
   return (
     <div className="block-gutter" aria-hidden="true">
       <div className={`block-gutter-inner${visible ? ' visible' : ''}`}>

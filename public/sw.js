@@ -2,21 +2,22 @@
  * sw.js — Notes Editor Service Worker
  *
  * Strategy:
- *   - App shell (HTML, JS, CSS, fonts) → Cache First with network fallback
- *   - API requests → Network First with cache fallback
- *   - Images → Cache First with stale-while-revalidate
+ *   - App shell and static assets → Cache First / stale-while-revalidate
+ *   - Document navigations → Network First with cached root fallback
+ *   - Images and runtime requests → stale-while-revalidate
  *
  * The app stores all user data in localStorage, so offline = full functionality.
  */
 
-const CACHE_NAME = 'notes-v2';
-const RUNTIME_CACHE = 'notes-runtime-v2';
-const FONT_CACHE = 'notes-fonts-v2';
+const CACHE_NAME = 'notes-v3';
+const RUNTIME_CACHE = 'notes-runtime-v3';
+const FONT_CACHE = 'notes-fonts-v3';
 
 // Resources to pre-cache on install (app shell)
 const APP_SHELL = [
   '/',
   '/manifest.json',
+  '/icon.svg',
 ];
 
 // ─── Install ─────────────────────────────────────────────────────────────────
@@ -67,6 +68,9 @@ self.addEventListener('fetch', (event) => {
   // Ignore chrome-extension and other non-http schemes
   if (!url.protocol.startsWith('http')) return;
 
+  const isSameOrigin = url.origin === self.location.origin;
+  const isNavigationRequest = request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html');
+
   // ── Fonts (Google Fonts CDN) ── cache-first, long TTL
   if (
     url.hostname === 'fonts.googleapis.com' ||
@@ -76,20 +80,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // ── Next.js static assets (_next/static)
-  // Let the browser handle Next.js chunk caching to avoid stale app-shell mismatches.
-  if (url.pathname.startsWith('/_next/static/')) {
+  // ── Next.js build assets and other same-origin static files
+  // These need to be cached explicitly so the app shell can boot offline.
+  if (
+    isSameOrigin &&
+    (
+      url.pathname.startsWith('/_next/static/') ||
+      url.pathname.startsWith('/_next/image') ||
+      request.destination === 'script' ||
+      request.destination === 'style' ||
+      request.destination === 'font' ||
+      request.destination === 'image' ||
+      url.pathname === '/manifest.json' ||
+      url.pathname === '/icon.svg'
+    )
+  ) {
+    event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));
     return;
   }
 
-  // ── Next.js image optimization ── network first
-  if (url.pathname.startsWith('/_next/image')) {
-    event.respondWith(networkFirst(request, RUNTIME_CACHE));
-    return;
-  }
-
-  // ── App navigation (HTML pages) ── network first with cache fallback
-  if (request.headers.get('accept')?.includes('text/html')) {
+  // ── App navigation (HTML pages) ── network first with cached root fallback
+  if (isNavigationRequest) {
     event.respondWith(networkFirst(request, CACHE_NAME));
     return;
   }
@@ -110,7 +121,7 @@ async function cacheFirst(request, cacheName) {
 
   try {
     const response = await fetch(request);
-    if (response.ok) {
+    if (isCacheableResponse(response)) {
       cache.put(request, response.clone());
     }
     return response;
@@ -126,7 +137,7 @@ async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
-    if (response.ok) {
+    if (isCacheableResponse(response)) {
       cache.put(request, response.clone());
     }
     return response;
@@ -151,7 +162,7 @@ async function staleWhileRevalidate(request, cacheName) {
 
   const fetchPromise = fetch(request)
     .then((response) => {
-      if (response.ok) {
+      if (isCacheableResponse(response)) {
         cache.put(request, response.clone());
       }
       return response;
@@ -159,6 +170,10 @@ async function staleWhileRevalidate(request, cacheName) {
     .catch(() => null);
 
   return cached || (await fetchPromise) || new Response('Offline', { status: 503 });
+}
+
+function isCacheableResponse(response) {
+  return Boolean(response && (response.ok || response.type === 'opaque'));
 }
 
 // ─── Background Sync (optional future) ───────────────────────────────────────

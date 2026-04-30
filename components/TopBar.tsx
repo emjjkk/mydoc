@@ -7,6 +7,7 @@ interface TopBarProps {
   onTitleChange: (title: string) => void;
   onMenuToggle: () => void;
   isSidebarOpen?: boolean;
+  wordCount?: number;
   onExport: () => void;
   onPreferences: () => void;
   savingStatus?: 'idle' | 'saving' | 'saved';
@@ -54,6 +55,7 @@ export function TopBar({
   onTitleChange,
   onMenuToggle,
   isSidebarOpen = false,
+  wordCount = 0,
   onExport,
   onPreferences,
   savingStatus = 'idle',
@@ -83,7 +85,7 @@ export function TopBar({
     alignItems: 'center',
     gap: '6px',
     padding: '5px 9px',
-    borderRadius: '7px',
+    borderRadius: '4px',
     border: '1px solid var(--border-default)',
     background: 'transparent',
     color: 'var(--text-secondary)',
@@ -109,8 +111,8 @@ export function TopBar({
         minHeight: '50px',
       }}
     >
-      {/* Left: menu toggle and saving indicator */}
-      <div style={{ justifySelf: 'start', display: 'flex', alignItems: 'center', gap: '12px' }}>
+      {/* Left: menu toggle, word count, and saving indicator */}
+      <div style={{ justifySelf: 'start', display: 'flex', alignItems: 'center', gap: '5px' }}>
         <button
           onClick={onMenuToggle}
           title={isSidebarOpen ? 'Close documents' : 'Open documents'}
@@ -139,7 +141,7 @@ export function TopBar({
         >
           {isSidebarOpen ? <IconChevronLeft /> : <IconMenu />}
         </button>
-        
+
         {/* Saving indicator */}
         {savingStatus !== 'idle' && (
           <div
@@ -155,6 +157,7 @@ export function TopBar({
             {savingStatus === 'saving' ? 'saving...' : 'saved'}
           </div>
         )}
+        
       </div>
 
       {/* Center: editable title */}
@@ -209,6 +212,18 @@ export function TopBar({
 
       {/* Right: action buttons */}
       <div style={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <div
+          style={{
+            fontSize: '12px',
+            fontFamily: 'var(--font-ui)',
+            color: 'var(--text-secondary)',
+            fontWeight: '500',
+            minWidth: '64px',
+          }}
+        >
+          {wordCount} {wordCount === 1 ? 'word' : 'words'}
+        </div>
+
         <button
           onClick={onExport}
           title="Export document"
@@ -249,6 +264,7 @@ export function TopBar({
         >
           <IconSettings />
         </button>
+      
       </div>
     </header>
   );

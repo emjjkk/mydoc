@@ -145,14 +145,14 @@ html, body {
 
 .editor-doc-container {
   width: 100%;
-  padding: 72px 72px 200px 72px;
+  padding: 56px 72px 200px 72px;
   min-height: 100%;
   cursor: text;
 }
 
 @media (max-width: 700px) {
   .editor-doc-container {
-    padding: 48px 20px 180px 20px;
+    padding: 36px 20px 180px 20px;
   }
 }
 
@@ -365,8 +365,29 @@ html, body {
   margin: 0;
 }
 
+.editor-ordered-list {
+  display: grid;
+  grid-template-columns: 2.2em minmax(0, 1fr);
+  column-gap: 0.35em;
+  align-items: start;
+  padding-left: 0;
+}
+
+.editor-ordered-list > .editor-block {
+  min-width: 0;
+}
+
+.editor-list-number {
+  grid-column: 1;
+  justify-self: end;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
 .editor-block.is-ul { list-style-type: disc; display: list-item; }
-.editor-block.is-ol { list-style-type: decimal; display: list-item; }
+.editor-block.is-ol { display: block; }
 
 /* Code block wrapper — ALWAYS dark background regardless of theme */
 .editor-code-wrap {

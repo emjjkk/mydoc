@@ -26,6 +26,12 @@ function useDebouncedCallback<T extends (...args: never[]) => void>(
   );
 }
 
+function getWordCount(content: string): number {
+  const trimmed = content.trim();
+  if (!trimmed) return 0;
+  return trimmed.split(/\s+/).filter(Boolean).length;
+}
+
 export default function NotesApp() {
   const {
     documents,
@@ -114,6 +120,8 @@ export default function NotesApp() {
     setExportOpen(true);
   }, []);
 
+  const activeWordCount = activeDocument ? getWordCount(activeDocument.content) : 0;
+
   const handleSidebarExport = useCallback(
     (id: string) => {
       openDocument(id);
@@ -198,6 +206,7 @@ export default function NotesApp() {
           onTitleChange={handleTitleChange}
           onMenuToggle={() => setSidebarOpen((v) => !v)}
           isSidebarOpen={sidebarOpen}
+          wordCount={activeWordCount}
           onExport={handleExportDoc}
           onPreferences={() => setPrefsOpen(true)}
           savingStatus={savingStatus}
